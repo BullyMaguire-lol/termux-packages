@@ -10,8 +10,4 @@ TERMUX_PKG_AUTO_UPDATE=true
 TERMUX_PKG_DEPENDS="libc++, qt6-qtbase, qt6-qtdeclarative, kf6-kconfig, kf6-kconfigwidgets, kf6-kcoreaddons, kf6-kguiaddons, kf6-ki18n, kf6-kio, kf6-kirigami, kf6-kitemviews, kf6-kservice, kf6-kwidgetsaddons, kf6-kxmlgui"
 TERMUX_PKG_BUILD_DEPENDS="extra-cmake-modules, qt6-qttools"
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
--DCMAKE_SYSTEM_NAME=Linux
--DKDE_INSTALL_QMLDIR=lib/qt6/qml
--DKDE_INSTALL_QTPLUGINDIR=lib/qt6/plugins
--DKF6_HOST_TOOLING=$TERMUX_PREFIX/opt/kf6/cross/lib/cmake/
 "
