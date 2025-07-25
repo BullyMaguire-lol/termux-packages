@@ -11,6 +11,6 @@ TERMUX_PKG_DEPENDS="libc++, qt6-qtbase, qt6-qtdeclarative, kf6-kconfig, kf6-kcon
 TERMUX_PKG_BUILD_DEPENDS="extra-cmake-modules, qt6-qttools"
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -DCMAKE_SYSTEM_NAME=Linux
--DKF6_BUILD_KCMUTILS_WITH_HOST_TOOLS=ON
--DKF6_HOST_TOOLING=$TERMUX_PREFIX/opt/kf6/cross/lib/cmake
+-DKDE_INSTALL_QMLDIR=lib/qt6/qml
+-DKDE_INSTALL_QTPLUGINDIR=lib/qt6/plugins
 "
