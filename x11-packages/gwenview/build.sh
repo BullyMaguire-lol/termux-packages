@@ -1,5 +1,5 @@
-TERMUX_PKG_HOMEPAGE="https://apps.kde.org/plasmatube"
-TERMUX_PKG_DESCRIPTION="Kirigami YouTube video player based on QtMultimedia and youtube-dl"
+TERMUX_PKG_HOMEPAGE="https://apps.kde.org/gwenview"
+TERMUX_PKG_DESCRIPTION="A fast and easy to use image viewer"
 TERMUX_PKG_LICENSE="GPL-2.0-or-later"
 TERMUX_PKG_MAINTAINER="@termux"
 TERMUX_PKG_VERSION="25.08.1"
