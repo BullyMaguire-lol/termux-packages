@@ -6,4 +6,5 @@ TERMUX_PKG_VERSION="1.1.1"
 TERMUX_PKG_SRCURL="https://github.com/KDE/mpvqt/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
 TERMUX_PKG_SHA256=7d509600de97fa1c4d8f40e23f28a814f529b25d312de9b6be5a8dd854b335e5
 TERMUX_PKG_AUTO_UPDATE=true
-TERMUX_PKG_DEPENDS="mpv"
+TERMUX_PKG_DEPENDS="mpv, qt6-qtdeclarative"
+TERMUX_PKG_BUILD_DEPENDS="extra-cmake-modules"
