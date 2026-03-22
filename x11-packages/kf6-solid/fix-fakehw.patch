@@ -1,0 +1,37 @@
+--- a/src/solid/devices/backends/fakehw/fakemanager.cpp
++++ b/src/solid/devices/backends/fakehw/fakemanager.cpp
+@@ -56,6 +56,34 @@
+                            << Solid::DeviceInterface::Battery
+                            << Solid::DeviceInterface::NetworkShare;
+     // clang-format on
++#ifdef __TERMUX__
++{
++    QString udi = QStringLiteral("/org/kde/solid/fakehw/internal_storage");
++
++    QMap<QString, QVariant> props;
++    props.insert(QStringLiteral("udi"), udi);
++    props.insert(QStringLiteral("product"), QStringLiteral("Internal Storage"));
++    props.insert(QStringLiteral("vendor"), QStringLiteral("Android"));
++
++    props.insert(QStringLiteral("usage"), QStringLiteral("FileSystem"));
++    props.insert(QStringLiteral("label"), QStringLiteral("Internal Storage"));
++    props.insert(QStringLiteral("uuid"), QStringLiteral("termux-internal"));
++    props.insert(QStringLiteral("size"), QVariant::fromValue<qulonglong>(0));
++    props.insert(QStringLiteral("volumeType"), QStringLiteral("Partition"));
++    props.insert(QStringLiteral("fsType"), QStringLiteral("ext4"));
++    props.insert(QStringLiteral("device"), QStringLiteral("/dev/fake0"));
++
++    props.insert(QStringLiteral("isMounted"), true);
++    props.insert(QStringLiteral("mountPoint"), QStringLiteral("/storage/emulated/0"));
++    props.insert(QStringLiteral("isIgnored"), false);
++    props.insert(QStringLiteral("isEncrypted"), false);
++
++    FakeDevice *dev = new FakeDevice(udi, props);
++
++    d->loadedDevices.insert(udi, dev);
++    Q_EMIT deviceAdded(udi);
++}
++#endif
+ }
+
+ FakeManager::~FakeManager()
