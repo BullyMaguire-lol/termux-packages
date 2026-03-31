@@ -1,0 +1,18 @@
+--- a/src/shared/misc.c
++++ b/src/shared/misc.c
+@@ -634,7 +634,15 @@
+ {
+ 	int i;
+ 	if (close_range(first, UINT_MAX, CLOSE_RANGE_CLOEXEC) < 0) {
++#ifdef __TERMUX__
++                long maxfd = sysconf(_SC_OPEN_MAX);
++                if (maxfd == -1)
++                        maxfd = 1024;
++
++                for (i = maxfd - 1; i >= first; --i)
++#else
+ 		for (i = getdtablesize() - 1; i >= first; --i)
++#endif
+ 			fcntl(i, F_SETFD, FD_CLOEXEC);
+ 	}
+ }

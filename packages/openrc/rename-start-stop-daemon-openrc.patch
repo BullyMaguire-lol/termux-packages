@@ -1,0 +1,55 @@
+--- a/sh/start-stop-daemon.sh
++++ b/sh/start-stop-daemon.sh
+@@ -1,4 +1,4 @@
+-# start / stop / status functions for start-stop-daemon
++# start / stop / status functions for start-stop-daemon-openrc
+ 
+ # Copyright (c) 2007-2015 The OpenRC Authors.
+ # See the Authors file at the top-level directory of this distribution and
+@@ -46,7 +46,7 @@
+ 	#the eval call is necessary for cases like:
+ 	# command_args="this \"is a\" test"
+ 	# to work properly.
+-	eval start-stop-daemon --start \
++	eval start-stop-daemon-openrc --start \
+ 		--exec $command \
+ 		${chroot:+--chroot} $chroot \
+ 		${directory:+--chdir} $directory \
+@@ -94,7 +94,7 @@
+ 	[ -n "$command" -o -n "$procname" -o -n "$pidfile" ] || return 0
+ 	yesno "${command_progress}" && _progress=--progress
+ 	ebegin "Stopping ${name:-$RC_SVCNAME}"
+-	start-stop-daemon --stop \
++	start-stop-daemon-openrc --stop \
+ 		${retry:+--retry} $retry \
+ 		${command:+--exec} $command \
+ 		${procname:+--name} $procname \
+
+--- a/src/librc/librc-daemon.c
++++ b/src/librc/librc-daemon.c
+@@ -120,7 +120,7 @@
+ 	  scenario
+ 
+ 	  /etc/init.d/ntpd stop does
+-	  start-stop-daemon --stop --name ntpd
++	  start-stop-daemon-openrc --stop --name ntpd
+ 	  catching /etc/init.d/ntpd stop
+ 
+ 	  nasty
+
+--- a/src/start-stop-daemon/meson.build
++++ b/src/start-stop-daemon/meson.build
+@@ -1,4 +1,4 @@
+-executable('start-stop-daemon', 'start-stop-daemon.c',
++executable('start-stop-daemon-openrc', 'start-stop-daemon.c',
+   dependencies: [rc, einfo, shared, audit_dep, dl_dep, pam_dep, cap_dep, pam_misc_dep, util_dep, selinux_dep, crypt_dep, dependency('threads')],
+   include_directories: incdir,
+   install: true,
+@@ -6,6 +6,6 @@
+ 
+ if get_option('pam')
+   install_data('start-stop-daemon.pam',
+-    rename : 'start-stop-daemon',
++    rename : 'start-stop-daemon-openrc',
+     install_dir : pamdir)
+ endif
