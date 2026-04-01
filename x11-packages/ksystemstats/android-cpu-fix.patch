@@ -1,0 +1,117 @@
+--- a/plugins/cpu/linuxcpuplugin.cpp	2026-03-17 16:33:14.000000000 +0530
++++ b/plugins/cpu/linuxcpuplugin.cpp	2026-04-02 19:08:43.193929524 +0530
+@@ -18,6 +18,12 @@
+ #include "linuxcpu.h"
+ #include "loadaverages.h"
+ 
++#ifdef __TERMUX__
++#include <QDir>
++#include <QDateTime>
++#include <algorithm>
++#endif
++
+ using namespace Qt::StringLiterals;
+ 
+ struct CpuInfo
+@@ -146,6 +152,10 @@
+ void LinuxCpuPluginPrivate::update()
+ {
+     m_loadAverages->update();
++#ifdef __TERMUX__
++    updateFromCpuIdle();
++    return;
++#endif
+ 
+     auto isSubscribed = [] (const KSysGuard::SensorObject *o) {return o->isSubscribed();};
+     if (std::none_of(m_cpus.cbegin(), m_cpus.cend(), isSubscribed) && !m_allCpus->isSubscribed()) {
+@@ -185,6 +195,77 @@
+     }
+ }
+ 
++#ifdef __TERMUX__
++void LinuxCpuPluginPrivate::updateFromCpuIdle()
++{
++    static QVector<long long> prevIdle;
++    static qint64 prevTime = 0;
++
++    const int cpuCount = m_cpus.size();
++    if (cpuCount == 0)
++        return;
++
++    if (prevIdle.size() != cpuCount)
++        prevIdle.resize(cpuCount);
++
++    const qint64 now = QDateTime::currentMSecsSinceEpoch();
++    if (prevTime == 0) {
++        prevTime = now;
++        return;
++    }
++
++    const double elapsedSec = (now - prevTime) / 1000.0;
++    prevTime = now;
++
++    long long totalIdleDelta = 0;
++
++    for (int i = 0; i < cpuCount; ++i) {
++        const QString basePath =
++            QStringLiteral("/sys/devices/system/cpu/cpu%1/cpuidle/").arg(i);
++
++        QDir dir(basePath);
++        if (!dir.exists())
++            continue;
++
++        long long idleSum = 0;
++
++        const auto states = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
++        for (const QString &state : states) {
++            QFile f(basePath + state + QStringLiteral("/time"));
++            if (f.open(QIODevice::ReadOnly)) {
++                idleSum += f.readAll().trimmed().toLongLong();
++            }
++        }
++
++        const long long delta = idleSum - prevIdle[i];
++        prevIdle[i] = idleSum;
++
++        totalIdleDelta += delta;
++    }
++
++    // cpuidle time is typically in microseconds
++    const double totalTime = elapsedSec * cpuCount * 1000000.0;
++    if (totalTime <= 0)
++        return;
++
++    double usage = 1.0 - (totalIdleDelta / totalTime);
++    usage = std::clamp(usage, 0.0, 1.0);
++
++    // simple smoothing for UI stability
++    static double prevUsage = 0.0;
++    usage = prevUsage * 0.7 + usage * 0.3;
++    prevUsage = usage;
++
++    const long long active = usage * 100.0;
++    const long long idle = (1.0 - usage) * 100.0;
++
++    m_allCpus->update(active, 0, 0, idle);
++
++    for (auto cpu : std::as_const(m_cpus)) {
++        cpu->update(active, 0, 0, idle);
++    }
++}
++#endif
+ 
+ void LinuxCpuPluginPrivate::addSensors()
+ {
+diff -ruN ksystemstats-6.6.3/plugins/cpu/linuxcpuplugin.h ksystemstats-6.6.3-b/plugins/cpu/linuxcpuplugin.h
+--- a/plugins/cpu/linuxcpuplugin.h	2026-03-17 16:33:14.000000000 +0530
++++ b/plugins/cpu/linuxcpuplugin.h	2026-04-02 19:06:06.337929515 +0530
+@@ -28,6 +28,9 @@
+     QHash<int, LinuxCpuObject *> m_cpus;
+     QMultiHash<QPair<int, int>, LinuxCpuObject * const> m_cpusBySystemIds;
+     LoadAverages *m_loadAverages;
++#ifdef __TERMUX__
++    void updateFromCpuIdle();
++#endif
+ };
+ 
+ #endif
