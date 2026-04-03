@@ -1,0 +1,102 @@
+--- a/src/solid/devices/backends/fstab/fstabhandling.cpp
++++ b/src/solid/devices/backends/fstab/fstabhandling.cpp
+@@ -304,6 +304,49 @@
+ 
+ void Solid::Backends::Fstab::FstabHandling::_k_updateMtabMountPointsCache()
+ {
++#ifdef __TERMUX__
++
++    if (globalFstabCache->localData().m_mtabCacheValid) {
++        return;
++    }
++
++    globalFstabCache->localData().m_mtabCache.clear();
++    globalFstabCache->localData().m_mtabOptionsCache.clear();
++    globalFstabCache->localData().m_fstabFstypeCache.clear();
++
++    QFile file(QStringLiteral("/proc/self/mountinfo"));
++    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
++        qWarning() << "Failed to open mountinfo";
++        return;
++    }
++
++    QTextStream in(&file);
++
++    while (!in.atEnd()) {
++        QString line = in.readLine();
++        QStringList parts = line.split(QLatin1Char(' '));
++
++        int sep = parts.indexOf(QStringLiteral("-"));
++        if (sep == -1 || parts.size() < sep + 3)
++            continue;
++
++        QString mountPoint = parts[4];
++        QString fsType     = parts[sep + 1];
++        QString source     = parts[sep + 2];
++
++        if (!(mountPoint == QStringLiteral("/data") ||
++              mountPoint.startsWith(QStringLiteral("/storage"))))
++            continue;
++
++        QString device = _k_deviceNameForMountpoint(source, fsType, mountPoint);
++
++        globalFstabCache->localData().m_mtabCache.insert(device, mountPoint);
++        globalFstabCache->localData().m_fstabFstypeCache.insert(device, fsType);
++    }
++
++    globalFstabCache->localData().m_mtabCacheValid = true;
++
++#else
+     if (globalFstabCache->localData().m_mtabCacheValid) {
+         return;
+     }
+@@ -376,6 +419,7 @@
+ #endif
+ 
+     globalFstabCache->localData().m_mtabCacheValid = true;
++#endif
+ }
+ 
+ QStringList Solid::Backends::Fstab::FstabHandling::currentMountPoints(const QString &device)
+
+--- a/src/solid/devices/backends/fstab/fstabstorageaccess.cpp
++++ b/src/solid/devices/backends/fstab/fstabstorageaccess.cpp
+@@ -48,8 +48,14 @@
+         m_isAccessible = true;
+     }
+ 
++#ifdef __TERMUX__
++    const bool inUserPath =
++        m_filePath.startsWith(QStringLiteral("/data")) ||
++        m_filePath.startsWith(QStringLiteral("/storage"));
++#else
+     const bool inUserPath =
+         m_filePath.startsWith(QLatin1String("/media/")) || m_filePath.startsWith(QLatin1String("/run/media/")) || m_filePath.startsWith(QDir::homePath());
++#endif
+ 
+     const bool gvfsHidden = FstabHandling::options(device->device()).contains(QLatin1String("x-gvfs-hide"));
+     const bool fsIsOverlay = FstabHandling::fstype(device->device()) == QLatin1String("overlay");
+
+--- a/src/solid/devices/backends/fstab/fstabwatcher.cpp
++++ b/src/solid/devices/backends/fstab/fstabwatcher.cpp
+@@ -27,6 +27,7 @@
+ 
+ FstabWatcher::FstabWatcher()
+ {
++#ifndef __TERMUX__
+ #ifdef Q_OS_LINUX
+     auto mountMonitor = mnt_new_monitor();
+ 
+@@ -90,6 +91,12 @@
+     m_isFstabWatched = m_fileSystemWatcher->addPath(s_fstabFile);
+     connect(m_fileSystemWatcher, &QFileSystemWatcher::fileChanged, this, &FstabWatcher::onFileChanged);
+ #endif
++#else
++    m_socketNotifier = nullptr;
++#ifdef Q_OS_LINUX
++    m_mountMonitor = nullptr;
++#endif
++#endif
+ }
+ 
+ FstabWatcher::~FstabWatcher()
