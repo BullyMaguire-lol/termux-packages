@@ -1,0 +1,199 @@
+--- a/plugins/disks/disks.cpp
++++ b/plugins/disks/disks.cpp
+@@ -17,6 +17,7 @@
+ #include <KIO/FileSystemFreeSpaceJob>
+ #include <KLocalizedString>
+ #include <KPluginFactory>
++#ifndef __TERMUX__
+ #include <Solid/Block>
+ #include <Solid/Device>
+ #include <Solid/DeviceNotifier>
+@@ -24,11 +25,16 @@
+ #include <Solid/StorageAccess>
+ #include <Solid/StorageDrive>
+ #include <Solid/StorageVolume>
+-
++#else
++#include <QFile>
++#include <QDir>
++#include <sys/statvfs.h>
++#endif
+ #include <systemstats/AggregateSensor.h>
+ #include <systemstats/SensorContainer.h>
+ #include <systemstats/SensorObject.h>
+ 
++#ifndef __TERMUX__
+ class VolumeObject : public KSysGuard::SensorObject
+ {
+     Q_OBJECT
+@@ -53,7 +59,72 @@
+     quint64 m_bytesWritten = 0;
+     bool m_rootDevice = false;
+ };
++#endif
++
++#ifdef __TERMUX__
++class VolumeObject : public KSysGuard::SensorObject
++{
++    Q_OBJECT
++
++public:
++    VolumeObject(const QString &mountPoint, KSysGuard::SensorContainer *parent)
++        : SensorObject(
++            QString("disk/") + mountPoint.mid(1).replace(QLatin1Char('/'), QLatin1Char('_')),
++            mountPoint,
++            parent
++          ),
++          mountPoint(mountPoint)
++    {
++        m_total = new KSysGuard::SensorProperty("total", "Total", this);
++        m_total->setUnit(KSysGuard::UnitByte);
++        m_total->setVariantType(QVariant::ULongLong);
++
++        m_used  = new KSysGuard::SensorProperty("used", "Used", this);
++        m_used->setUnit(KSysGuard::UnitByte);
++        m_used->setVariantType(QVariant::ULongLong);
++
++        m_free  = new KSysGuard::SensorProperty("free", "Free", this);
++        m_free->setUnit(KSysGuard::UnitByte);
++        m_free->setVariantType(QVariant::ULongLong);
++
++        auto usedPercent = new KSysGuard::PercentageSensor(this, "usedPercent", i18nc("@title", "Used %"));
++        usedPercent->setBaseSensor(m_used);
++
++        auto freePercent = new KSysGuard::PercentageSensor(this, "freePercent", i18nc("@title", "Free %"));
++        freePercent->setBaseSensor(m_free);
++    }
++
++    void update()
++    {
++        struct statvfs stat;
++        if (statvfs(mountPoint.toUtf8().constData(), &stat) != 0)
++            return;
++
++        quint64 total = stat.f_blocks * stat.f_frsize;
++        quint64 free  = stat.f_bavail * stat.f_frsize;
++        quint64 used  = total - free;
++
++        m_total->setValue(total);
++
++        m_free->setValue(free);
++        m_free->setMax(total);
++
++        m_used->setValue(used);
++        m_used->setMax(total);
++    }
++
++    bool isRootDevice() const { return false; }
++
++    const QString mountPoint;
++
++private:
++    KSysGuard::SensorProperty *m_total;
++    KSysGuard::SensorProperty *m_used;
++    KSysGuard::SensorProperty *m_free;
++};
++#endif
+ 
++#ifndef __TERMUX__
+ QString VolumeObject::idHelper(const Solid::Device &device)
+ {
+     auto volume = device.as<Solid::StorageVolume>();
+@@ -158,11 +229,13 @@
+     m_bytesRead = read;
+     m_bytesWritten = written;
+ }
++#endif
+ 
+ DisksPlugin::DisksPlugin(QObject *parent, const QVariantList &args)
+     : SensorPlugin(parent, args)
+ {
+     auto container = new KSysGuard::SensorContainer("disk", i18n("Disks"), this);
++#ifndef __TERMUX__
+     auto storageVolumes = Solid::Device::listFromType(Solid::DeviceInterface::StorageVolume);
+     for (const auto &storageVolume : storageVolumes) {
+        addDevice(storageVolume);
+@@ -182,6 +255,27 @@
+             }
+         }
+     });
++#else
++    QStringList mountPoints;
++
++    mountPoints << "/data";
++    mountPoints << "/storage/emulated/0";
++
++    QDir storageDir("/storage");
++    for (const QString &entry : storageDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
++        if (entry == "emulated" || entry == "self")
++            continue;
++
++        mountPoints << "/storage/" + entry;
++    }
++
++    for (const QString &mp : mountPoints) {
++        struct statvfs st;
++        if (statvfs(mp.toUtf8().constData(), &st) == 0 && st.f_blocks > 0) {
++            m_volumesByDevice.insert(mp, new VolumeObject(mp, container));
++        }
++    }
++#endif
+     addAggregateSensors();
+ #ifdef Q_OS_FREEBSD
+     geom_stats_open();
+@@ -195,6 +289,7 @@
+ #endif
+ }
+ 
++#ifndef __TERMUX__
+ void DisksPlugin::addDevice(const Solid::Device& device)
+ {
+     auto container = containers()[0];
+@@ -242,7 +337,9 @@
+         }
+     });
+ }
++#endif
+ 
++#ifndef __TERMUX__
+ void DisksPlugin::createAccessibleVolumeObject(const Solid::Device &device)
+ {
+     auto block = device.as<Solid::Block>();
+@@ -257,6 +354,7 @@
+     }
+     m_volumesByDevice.insert(block->device(), new VolumeObject(device,  containers()[0]));
+ }
++#endif
+ 
+ void DisksPlugin::addAggregateSensors()
+ {
+@@ -331,10 +429,15 @@
+ {
+     bool anySubscribed = false;
+     for (auto volume : m_volumesByDevice) {
++#ifdef __TERMUX__
++         anySubscribed = true;
++         volume->update();
++#else
+         if (volume->isSubscribed()) {
+             anySubscribed = true;
+             volume->update();
+         }
++#endif
+     }
+ 
+     if (!anySubscribed) {
+@@ -347,7 +450,12 @@
+     } else {
+         m_elapsedTimer.start();
+     }
+-#if defined Q_OS_LINUX
++
++#ifdef __TERMUX__
++Q_UNUSED(elapsed);
++#endif
++
++#if defined(Q_OS_LINUX) && !defined(__TERMUX__)
+     QFile diskstats("/proc/diskstats");
+     if (!diskstats.exists()) {
+         return;
