@@ -1,0 +1,11 @@
+--- a/src/code/cbz/CMakeLists.txt
++++ b/src/code/cbz/CMakeLists.txt
+@@ -5,7 +5,7 @@
+     PURPOSE "Required for the unarr based rar support used for reading books in the CBR format"
+     TYPE REQUIRED)
+
+-find_package(Qt${QT_MAJOR_VERSION} REQUIRED COMPONENTS Sql)
++find_package(Qt${QT_MAJOR_VERSION} REQUIRED COMPONENTS Sql QuickPrivate)
+ find_package(KF${KF_MAJOR_VERSION} ${REQUIRED_KF_VERSION} REQUIRED COMPONENTS
+     Archive
+     KIO
