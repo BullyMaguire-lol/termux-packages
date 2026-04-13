@@ -1,0 +1,11 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -34,7 +34,7 @@
+ include(FeatureSummary)
+ include(ECMQMLModules)
+
+-find_package(Qt6 ${REQUIRED_QT_VERSION} REQUIRED NO_MODULE COMPONENTS Widgets Qml Sql)
++find_package(Qt6 ${REQUIRED_QT_VERSION} REQUIRED NO_MODULE COMPONENTS Widgets Qml Sql CorePrivate WebEngineQuickPrivate)
+ find_package(KF6 ${KF5_VERSION} REQUIRED COMPONENTS I18n CoreAddons)
+
+ find_package(Qt6WebEngineCore REQUIRED)
