@@ -1,0 +1,10 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -91,7 +91,7 @@
+ if(UNIX AND NOT APPLE AND NOT ANDROID)
+     install(TARGETS ${PROJECT_NAME} ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+     install(FILES org.kde.communicator.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+-    install(FILES org.kde.communicator.json DESTINATION /usr/share/maui-accounts/manifests)
++    install(FILES org.kde.communicator.json DESTINATION ${KDE_INSTALL_DATADIR}/maui-accounts/manifests)
+     install(FILES org.kde.communicator.appdata.xml DESTINATION ${KDE_INSTALL_METAINFODIR})
+ endif()
