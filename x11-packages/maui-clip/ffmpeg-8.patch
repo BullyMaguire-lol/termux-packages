@@ -1,0 +1,34 @@
+# From: Arch Linux
+# Source: https://gitlab.archlinux.org/archlinux/packaging/packages/maui-clip/-/blob/32b10b2a3a3aeacb54e0ff0145167ba03dc7347c/ffmpeg-8.patch
+
+diff --git a/ffmpegthumbnailer/moviedecoder.cpp b/ffmpegthumbnailer/moviedecoder.cpp
+index 39a7c00..21c3864 100644
+--- a/src/utils/ffmpegthumbs/moviedecoder.cpp
++++ b/src/utils/ffmpegthumbs/moviedecoder.cpp
+@@ -89,7 +89,7 @@ void MovieDecoder::destroy()
+ {
+     deleteFilterGraph();
+     if (m_pVideoCodecContext) {
+-        avcodec_close(m_pVideoCodecContext);
++        avcodec_free_context(&m_pVideoCodecContext);
+         m_pVideoCodecContext = nullptr;
+     }
+     m_pVideoStream = nullptr;
+@@ -215,7 +215,7 @@ void MovieDecoder::seek(int timeInSeconds)
+         }
+ 
+         ++keyFrameAttempts;
+-    } while ((!gotFrame || !m_pFrame->key_frame) && keyFrameAttempts < 200);
++    } while ((!gotFrame || !(m_pFrame->flags & AV_FRAME_FLAG_KEY)) && keyFrameAttempts < 200);
+ 
+     if (gotFrame == 0) {
+         qCDebug(ffmpegthumbs_LOG) << "Seeking in video failed";
+@@ -404,7 +404,7 @@ bool MovieDecoder::processFilterGraph(AVFrame *dst, const AVFrame *src,
+ 
+ void MovieDecoder::getScaledVideoFrame(int scaledSize, bool maintainAspectRatio, VideoFrame& videoFrame)
+ {
+-    if (m_pFrame->interlaced_frame) {
++    if (m_pFrame->flags & AV_FRAME_FLAG_INTERLACED) {
+         processFilterGraph((AVFrame*) m_pFrame, (AVFrame*) m_pFrame, m_pVideoCodecContext->pix_fmt,
+                               m_pVideoCodecContext->width, m_pVideoCodecContext->height);
+     }
