@@ -1,0 +1,21 @@
+--- a/src/views/widgets/BuildBar.qml
++++ b/src/views/widgets/BuildBar.qml
+@@ -20,8 +20,8 @@
+     Popup
+     {
+         id: _projectMenu
+-        maxHeight: 200
+-        maxWidth:  parent.width
++        height: 200
++        width: parent.width
+
+         ColumnLayout
+         {
+@@ -158,7 +158,6 @@
+
+
+             menu.title: _cmakeProject.title
+-            menu.titleImageSource: _project.projectLogo
+
+             Maui.LabelDelegate
+             {
