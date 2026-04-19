@@ -1,0 +1,27 @@
+--- a/src/backends/x11/standalone/x11_standalone_egl_backend.cpp
++++ b/src/backends/x11/standalone/x11_standalone_egl_backend.cpp
+@@ -110,13 +110,24 @@
+             shareContext = nativeHandle->nativeContext();
+             shareDisplay = nativeHandle->display();
+         } else {
++#ifdef __TERMUX__
++            qWarning() << "No globalShareContext, using EGL_NO_CONTEXT fallback";
++            shareContext = EGL_NO_CONTEXT;
++            shareDisplay = eglGetDisplay(m_backend->display());
++#else
+             setFailed(QStringLiteral("Invalid QOpenGLContext::globalShareContext()"));
+             return;
++#endif
+         }
+     }
+     if (shareContext == EGL_NO_CONTEXT) {
++#ifdef __TERMUX__
++        qWarning() << "Continuing without global share context";
++#else
+         setFailed(QStringLiteral("QOpenGLContext::globalShareContext() is required"));
++
+         return;
++#endif
+     }
+
+     m_fbo = std::make_unique<GLFramebuffer>(0, workspace()->geometry().size());

@@ -1,0 +1,115 @@
+--- a/src/backends/x11/standalone/x11_standalone_egl_backend.cpp
++++ b/src/backends/x11/standalone/x11_standalone_egl_backend.cpp
+@@ -235,7 +235,11 @@
+         }
+     }
+
++#ifdef __TERMUX__
++    setSupportsBufferAge(false);
++#else
+     setSupportsBufferAge(display->supportsBufferAge());
++#endif
+     setSupportsNativeFence(display->supportsNativeFence());
+     setExtensions(display->extensions());
+     m_context = EglContext::create(display, chooseBufferConfig(), m_backend->sceneEglGlobalShareContext());
+@@ -356,9 +360,13 @@
+     makeCurrent();
+
+     QRegion repaint;
++#ifdef __TERMUX__
++        repaint = infiniteRegion();
++#else
+     if (supportsBufferAge()) {
+         repaint = m_damageJournal.accumulate(m_bufferAge, infiniteRegion());
+     }
++#endif
+     eglWaitNative(EGL_CORE_NATIVE_ENGINE);
+
+     m_query = std::make_unique<GLRenderTimeQuery>(m_context);
+@@ -374,9 +382,13 @@
+     m_query->end();
+     frame->addRenderTimeQuery(std::move(m_query));
+     // Save the damaged region to history
++#ifdef __TERMUX__
++// disable damage tracking
++#else
+     if (supportsBufferAge()) {
+         m_damageJournal.add(damagedRegion);
+     }
++#endif
+     m_lastRenderedRegion = renderedRegion;
+ }
+
+@@ -408,15 +420,34 @@
+
+ void EglBackend::presentSurface(EGLSurface surface, const QRegion &damage, const QRect &screenGeometry)
+ {
++#ifdef __TERMUX__
++    const bool fullRepaint = true;
++#else
+     const bool fullRepaint = supportsBufferAge() || (damage == screenGeometry);
++#endif
+
+     if (fullRepaint || !m_havePostSubBuffer) {
+         // the entire screen changed, or we cannot do partial updates (which implies we enabled surface preservation)
+         eglSwapBuffers(eglDisplayObject()->handle(), surface);
++#ifdef __TERMUX__
++    m_bufferAge = 0;
++#else
+         if (supportsBufferAge()) {
+             eglQuerySurface(eglDisplayObject()->handle(), surface, EGL_BUFFER_AGE_EXT, &m_bufferAge);
+         }
++#endif
+     } else {
++#ifndef __TERMUX__
++    for (const QRect &r : damage) {
++        eglPostSubBufferNV(
++            eglDisplayObject()->handle(),
++            surface,
++            r.left(),
++            screenGeometry.height() - r.bottom() - 1,
++            r.width(),
++            r.height());
++    }
++#endif
+         // a part of the screen changed, and we can use eglPostSubBufferNV to copy the updated area
+         for (const QRect &r : damage) {
+             eglPostSubBufferNV(eglDisplayObject()->handle(), surface, r.left(), screenGeometry.height() - r.bottom() - 1, r.width(), r.height());
+@@ -467,6 +498,10 @@
+
+ bool EglSurfaceTextureX11::create()
+ {
++#ifdef __TERMUX__
++    qWarning() << "disabling EGL pixmap import";
++    return false;
++#else
+     auto texture = std::make_shared<EglPixmapTexture>(static_cast<EglBackend *>(m_backend));
+     if (texture->create(m_pixmap)) {
+         m_texture = {texture};
+@@ -474,6 +509,7 @@
+     } else {
+         return false;
+     }
++#endif
+ }
+
+ void EglSurfaceTextureX11::update(const QRegion &region)
+@@ -497,6 +533,10 @@
+
+ bool EglPixmapTexture::create(SurfacePixmapX11 *pixmap)
+ {
++#ifdef __TERMUX__
++    qWarning() << "EglPixmapTexture disabled";
++    return false;
++#else
+     const xcb_pixmap_t nativePixmap = pixmap->pixmap();
+     if (nativePixmap == XCB_NONE) {
+         return false;
+@@ -526,6 +566,7 @@
+     d->m_size = pixmap->size();
+     d->updateMatrix();
+     return true;
++#endif
+ }
+
+ void EglPixmapTexture::onDamage()
