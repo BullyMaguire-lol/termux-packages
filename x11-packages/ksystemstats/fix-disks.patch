@@ -1,0 +1,198 @@
+--- a/plugins/disks/disks.cpp
++++ b/plugins/disks/disks.cpp
+@@ -12,11 +12,10 @@
+ #include <libgeom.h>
+ #endif
+ 
++#ifndef __TERMUX__
+ #include <QUrl>
+ 
+ #include <KIO/FileSystemFreeSpaceJob>
+-#include <KLocalizedString>
+-#include <KPluginFactory>
+ #include <Solid/Block>
+ #include <Solid/Device>
+ #include <Solid/DeviceNotifier>
+@@ -24,11 +23,18 @@
+ #include <Solid/StorageAccess>
+ #include <Solid/StorageDrive>
+ #include <Solid/StorageVolume>
++#else
++#include <QFile>
++#include <sys/statvfs.h>
++#endif
++#include <KLocalizedString>
++#include <KPluginFactory>
+ 
+ #include <systemstats/AggregateSensor.h>
+ #include <systemstats/SensorContainer.h>
+ #include <systemstats/SensorObject.h>
+ 
++#ifndef __TERMUX__
+ class VolumeObject : public KSysGuard::SensorObject
+ {
+     Q_OBJECT
+@@ -53,7 +59,67 @@
+     quint64 m_bytesWritten = 0;
+     bool m_rootDevice = false;
+ };
++#endif
++
++#ifdef __TERMUX__
++class VolumeObject : public KSysGuard::SensorObject
++{
++    Q_OBJECT
++public:
++    VolumeObject(const QString &mountPoint, KSysGuard::SensorContainer *parent)
++        : SensorObject(
++            mountPoint == QLatin1String("/") ? QStringLiteral("root")
++                : mountPoint.mid(1).replace(QLatin1Char('/'), QLatin1Char('_')),
++            mountPoint,
++            parent
++          )
++        , mountPoint(mountPoint)
++    {
++        m_total = new KSysGuard::SensorProperty("total", i18nc("@title", "Total Space"), this);
++        m_total->setUnit(KSysGuard::UnitByte);
++        m_total->setVariantType(QVariant::ULongLong);
++
++        m_used = new KSysGuard::SensorProperty("used", i18nc("@title", "Used Space"), this);
++        m_used->setUnit(KSysGuard::UnitByte);
++        m_used->setVariantType(QVariant::ULongLong);
++
++        m_free = new KSysGuard::SensorProperty("free", i18nc("@title", "Free Space"), this);
++        m_free->setUnit(KSysGuard::UnitByte);
++        m_free->setVariantType(QVariant::ULongLong);
++
++        auto usedPercent = new KSysGuard::PercentageSensor(this, "usedPercent", i18nc("@title", "Percentage Used"));
++        usedPercent->setBaseSensor(m_used);
++
++        auto freePercent = new KSysGuard::PercentageSensor(this, "freePercent", i18nc("@title", "Percentage Free"));
++        freePercent->setBaseSensor(m_free);
++    }
++
++    void update()
++    {
++        struct statvfs st;
++        if (statvfs(mountPoint.toUtf8().constData(), &st) != 0)
++            return;
++        const quint64 total = static_cast<quint64>(st.f_blocks) * st.f_frsize;
++        const quint64 avail = static_cast<quint64>(st.f_bavail) * st.f_frsize;
++        m_total->setValue(total);
++        m_free->setValue(avail);
++        m_free->setMax(total);
++        m_used->setValue(total - avail);
++        m_used->setMax(total);
++    }
++
++    bool isRootDevice() const { return false; }
++
++    const QString mountPoint;
++
++private:
++    KSysGuard::SensorProperty *m_total = nullptr;
++    KSysGuard::SensorProperty *m_used  = nullptr;
++    KSysGuard::SensorProperty *m_free  = nullptr;
++};
++#endif
+ 
++#ifndef __TERMUX__
+ QString VolumeObject::idHelper(const Solid::Device &device)
+ {
+     auto volume = device.as<Solid::StorageVolume>();
+@@ -158,11 +224,13 @@
+     m_bytesRead = read;
+     m_bytesWritten = written;
+ }
++#endif
+ 
+ DisksPlugin::DisksPlugin(QObject *parent, const QVariantList &args)
+     : SensorPlugin(parent, args)
+ {
+     auto container = new KSysGuard::SensorContainer("disk", i18n("Disks"), this);
++#ifndef __TERMUX__
+     auto storageVolumes = Solid::Device::listFromType(Solid::DeviceInterface::StorageVolume);
+     for (const auto &storageVolume : storageVolumes) {
+        addDevice(storageVolume);
+@@ -182,6 +250,11 @@
+             }
+         }
+     });
++#else
++    struct statvfs st;
++    if (statvfs("/data", &st) == 0 && st.f_blocks > 0)
++        m_volumesByDevice.insert(QStringLiteral("/data"), new VolumeObject(QStringLiteral("/data"), container));
++#endif
+     addAggregateSensors();
+ #ifdef Q_OS_FREEBSD
+     geom_stats_open();
+@@ -195,6 +268,7 @@
+ #endif
+ }
+ 
++#ifndef __TERMUX__
+ void DisksPlugin::addDevice(const Solid::Device& device)
+ {
+     auto container = containers()[0];
+@@ -257,6 +331,7 @@
+     }
+     m_volumesByDevice.insert(block->device(), new VolumeObject(device,  containers()[0]));
+ }
++#endif
+ 
+ void DisksPlugin::addAggregateSensors()
+ {
+@@ -299,6 +374,7 @@
+     used->setMatchSensors(QRegularExpression("^.*$"), "used");
+     used->setFilterFunction(filterFunction);
+ 
++#ifndef __TERMUX__
+     auto readRate = new KSysGuard::AggregateSensor(allDisks, "read", i18nc("@title", "Read Rate"), 0);
+     readRate->setShortName(i18nc("@title Short for 'Read Rate'", "Read"));
+     readRate->setUnit(KSysGuard::UnitByteRate);
+@@ -312,6 +388,7 @@
+     writeRate->setVariantType(QVariant::Double);
+     writeRate->setMatchSensors(QRegularExpression("^(?!all).*$"), "write");
+     writeRate->setFilterFunction(filterFunction);
++#endif
+ 
+     auto freePercent = new KSysGuard::PercentageSensor(allDisks, "freePercent", i18nc("@title", "Percentage Free"));
+     freePercent->setShortName(i18nc("@title, Short for `Percentage Free", "Free"));
+@@ -347,7 +424,7 @@
+     } else {
+         m_elapsedTimer.start();
+     }
+-#if defined Q_OS_LINUX
++#if defined Q_OS_LINUX && !defined(__TERMUX__)
+     QFile diskstats("/proc/diskstats");
+     if (!diskstats.exists()) {
+         return;
+
+--- a/plugins/disks/disks.h
++++ b/plugins/disks/disks.h
+@@ -12,10 +12,12 @@
+ 
+ #include "systemstats/SensorPlugin.h"
+ 
++#ifndef __TERMUX__
+ namespace Solid {
+     class Device;
+     class StorageVolume;
+ }
++#endif
+ 
+ class VolumeObject;
+ 
+@@ -35,9 +37,11 @@
+ 
+ 
+ private:
+-    void addDevice(const Solid::Device &device);
+     void addAggregateSensors();
++#ifndef __TERMUX__
++    void addDevice(const Solid::Device &device);
+     void createAccessibleVolumeObject(const Solid::Device &device);
++#endif
+ 
+     QHash<QString, VolumeObject*> m_volumesByDevice;
+     QElapsedTimer m_elapsedTimer;
