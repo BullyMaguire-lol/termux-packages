@@ -1,0 +1,16 @@
+diff --git a/src/xdp-app-info.c b/src/xdp-app-info.c
+index a518c39..ec27141 100644
+--- a/src/xdp-app-info.c
++++ b/src/xdp-app-info.c
+@@ -326,6 +326,11 @@ xdp_app_info_new (const char  *sender,
+   g_autofd int pidfd_owned = pidfd;
+   g_autoptr(GError) local_error = NULL;
+ 
++#ifdef __ANDROID__
++  app_info = xdp_app_info_host_new (sender, pid, &pidfd_owned);
++  return g_steal_pointer (&app_info);
++#endif
++
+   app_info = xdp_app_info_flatpak_new (sender, pid, &pidfd_owned, &local_error);
+ 
+   if (!app_info && !g_error_matches (local_error, XDP_APP_INFO_ERROR,
