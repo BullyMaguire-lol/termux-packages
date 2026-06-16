@@ -1,0 +1,21 @@
+diff -ruN extra-cmake-modules-6.27.0/kde-modules/KDEInstallDirs6.cmake extra-cmake-modules-6.27.0-b/kde-modules/KDEInstallDirs6.cmake
+--- a/kde-modules/KDEInstallDirs6.cmake	2026-06-05 21:15:00.000000000 +0530
++++ b/kde-modules/KDEInstallDirs6.cmake	2026-06-16 10:34:26.020007003 +0530
+@@ -252,7 +252,7 @@
+     if (qt_archdata_dir)
+         _define_absolute(QTMETATYPESDIR "${qt_archdata_dir}/metatypes" "Qt metatypes files")
+     else()
+-        _define_non_cache(QTMETATYPESDIR "metatypes")
++        _define_relative(QTMETATYPESDIR LIBDIR "qt6/metatypes" "Qt metatypes files")
+     endif()
+ else()
+     set(_pluginsDirParent LIBDIR)
+@@ -266,7 +266,7 @@
+     _define_relative(QMLDIR LIBDIR "qml"
+         "QtQuick2 imports")
+ 
+-    _define_non_cache(QTMETATYPESDIR "metatypes")
++    _define_relative(QTMETATYPESDIR LIBDIR "qt6/metatypes" "Qt metatypes files")
+ endif()
+ 
+ _define_relative(PLUGINDIR QTPLUGINDIR ""
