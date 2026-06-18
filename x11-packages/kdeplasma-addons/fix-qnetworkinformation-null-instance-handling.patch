@@ -1,0 +1,33 @@
+diff --git a/applets/comic/engine/comic.cpp b/applets/comic/engine/comic.cpp
+index 0873ab6..c802686 100644
+--- a/applets/comic/engine/comic.cpp
++++ b/applets/comic/engine/comic.cpp
+@@ -280,5 +280,5 @@ QString ComicEngine::lastCachedIdentifier(const QString &identifier) const
+ bool ComicEngine::isOnline() const
+ {
+     const auto instance = QNetworkInformation::instance();
+-    return (instance && instance->reachability() == QNetworkInformation::Reachability::Online);
++    return !instance || instance->reachability() != QNetworkInformation::Reachability::Disconnected;
+ }
+diff --git a/applets/weather/ioncontrol_p.cpp b/applets/weather/ioncontrol_p.cpp
+index 20bd21f..473cc13 100644
+--- a/applets/weather/ioncontrol_p.cpp
++++ b/applets/weather/ioncontrol_p.cpp
+@@ -148,7 +148,7 @@ void IonControl::onFetchLocationsEnded()
+     m_isBusy = false;
+ 
+     const auto instance = QNetworkInformation::instance();
+-    if (instance && instance->reachability() == QNetworkInformation::Reachability::Online) {
++    if (!instance || instance->reachability() != QNetworkInformation::Reachability::Disconnected) {
+         checkQueues();
+     }
+ }
+@@ -234,7 +234,7 @@ void IonControl::onFetchForecastEnded()
+     m_isBusy = false;
+ 
+     const auto instance = QNetworkInformation::instance();
+-    if (instance && instance->reachability() == QNetworkInformation::Reachability::Online) {
++    if (!instance || instance->reachability() != QNetworkInformation::Reachability::Disconnected) {
+         checkQueues();
+     }
+ }
