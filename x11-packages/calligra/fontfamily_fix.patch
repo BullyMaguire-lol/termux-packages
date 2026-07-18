@@ -1,0 +1,11 @@
+--- a/libs/text/KoTextEditor_format.cpp
++++ b/libs/text/KoTextEditor_format.cpp
+@@ -297,6 +297,7 @@
+     d->updateState(KoTextEditor::Private::Format, kundo2_i18n("Set Font"));
+     QTextCharFormat format;
+     format.setFontFamily(font);
++    format.setProperty(QTextFormat::FontFamily, font);
+     mergeAutoStyle(format);
+     d->updateState(KoTextEditor::Private::NoOp);
+ }
+

@@ -1,0 +1,10 @@
+--- a/libs/text/styles/KoCharacterStyle.cpp
++++ b/libs/text/styles/KoCharacterStyle.cpp
+@@ -463,6 +463,7 @@
+                     clearProperty.append(KoCharacterStyle::FontCharset);
+                 }
+                 format.setProperty(it.key(), it.value());
++                format.setProperty(QTextFormat::FontFamilies, QStringList(it.value().toString()));
+             } else {
+                 format.setProperty(it.key(), it.value());
+             }
