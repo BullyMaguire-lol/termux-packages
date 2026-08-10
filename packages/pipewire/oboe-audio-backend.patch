@@ -1,0 +1,1033 @@
+diff -ruN a/spa/plugins/support/loop.c b/spa/plugins/support/loop.c
+--- a/spa/plugins/support/loop.c	2026-08-14 09:57:25.705087657 +0000
++++ b/spa/plugins/support/loop.c	2026-08-14 09:57:26.463604919 +0000
+@@ -1383,9 +1383,13 @@
+ 
+ 	CHECK(pthread_mutexattr_init(&attr), error_exit);
+ 	CHECK(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE), error_exit_free_attr);
++#if !defined(__ANDROID__) && !defined(__TERMUX__)
+ 	if (impl->prio_inherit)
+ 		CHECK(pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT),
+ 					error_exit_free_attr)
++#else
++	impl->prio_inherit = false;
++#endif
+ 	CHECK(pthread_mutex_init(&impl->lock, &attr), error_exit_free_attr);
+ 	pthread_mutexattr_destroy(&attr);
+ 
+diff -ruN a/src/modules/meson.build b/src/modules/meson.build
+--- a/src/modules/meson.build	2026-08-14 09:57:25.934118850 +0000
++++ b/src/modules/meson.build	2026-08-14 09:57:26.587453376 +0000
+@@ -3,6 +3,7 @@
+ # The list of "main" source files for modules, the ones that have the
+ # doxygen documentation
+ module_sources = [
++  'module-oboe-sink.c',
+   'module-access.c',
+   'module-adapter.c',
+   'module-avb.c',
+@@ -430,6 +431,28 @@
+   dependencies : [mathlib, dl_lib, pipewire_dep],
+ )
+ 
++build_module_oboe = false
++if have_cpp
++  oboe_dep = cxx.find_library('oboe', required : false)
++  opensles_dep = cxx.find_library('OpenSLES', required : false)
++  log_dep = cxx.find_library('log', required : false)
++  build_module_oboe = oboe_dep.found() and opensles_dep.found() and log_dep.found() and \
++    cxx.has_header('oboe/Oboe.h', dependencies : oboe_dep)
++endif
++
++if build_module_oboe
++  pipewire_module_oboe_sink = shared_library('pipewire-module-oboe-sink',
++    [ 'module-oboe-sink.c', 'oboe-shim.cpp' ],
++    include_directories : [configinc],
++    install : true,
++    install_dir : modules_install_dir,
++    install_rpath: modules_install_dir,
++    override_options : ['cpp_std=c++17'],
++    dependencies : [mathlib, dl_lib, pipewire_dep, oboe_dep, opensles_dep, log_dep],
++  )
++endif
++summary({'oboe': build_module_oboe}, bool_yn: true, section: 'Optional Modules')
++
+ pipewire_module_protocol_simple = shared_library('pipewire-module-protocol-simple',
+   [ 'module-protocol-simple.c' ],
+   include_directories : [configinc],
+diff -ruN a/src/modules/module-oboe-sink.c b/src/modules/module-oboe-sink.c
+--- a/src/modules/module-oboe-sink.c	1970-01-01 00:00:00.000000000 +0000
++++ b/src/modules/module-oboe-sink.c	2026-08-14 09:57:26.587965395 +0000
+@@ -0,0 +1,610 @@
++#include "config.h"
++
++#include <string.h>
++#include <errno.h>
++#include <stdlib.h>
++
++#include "oboe-shim.h"
++
++#include <spa/utils/result.h>
++#include <spa/utils/string.h>
++#include <spa/utils/json.h>
++#include <spa/utils/dll.h>
++#include <spa/debug/types.h>
++#include <spa/pod/builder.h>
++#include <spa/param/audio/format-utils.h>
++#include <spa/param/audio/raw.h>
++#include <spa/param/audio/raw-json.h>
++
++#include <pipewire/impl.h>
++#include <pipewire/i18n.h>
++
++#define NAME "oboe-sink"
++
++#define DEFAULT_FORMAT "S16"
++#define DEFAULT_RATE 48000
++#define DEFAULT_CHANNELS 2
++#define DEFAULT_POSITION "[ FL FR ]"
++
++#define DEFAULT_BUFFER_BURSTS 2
++
++PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
++#define PW_LOG_TOPIC_DEFAULT mod_topic
++
++#define MODULE_USAGE	"( remote.name=<remote> ) "				\
++			"( node.name=<name of the node> ) "			\
++			"( node.description=<description of the node> ) "	\
++			"( audio.format=<S16|F32> ) "				\
++			"( audio.rate=<sample rate> ) "			\
++			"( audio.channels=<number of channels> ) "		\
++			"( audio.position=<channel map> ) "			\
++			"( oboe.performance-mode=<none|low-latency|power-saving> ) " \
++			"( oboe.sharing-mode=<shared|exclusive> ) "		\
++			"( oboe.buffer-bursts=<1-8, default 2> ) "		\
++			"( stream.props=<properties> ) "
++
++static const struct spa_dict_item module_props[] = {
++	{ PW_KEY_MODULE_AUTHOR, "Termux AAudio/Oboe backend contributors" },
++	{ PW_KEY_MODULE_DESCRIPTION, "Play audio through Google's Oboe library" },
++	{ PW_KEY_MODULE_USAGE, MODULE_USAGE },
++	{ PW_KEY_MODULE_VERSION, PACKAGE_VERSION },
++};
++
++struct impl {
++	struct pw_context *context;
++	struct pw_loop *data_loop;
++
++	struct pw_properties *props;
++	struct pw_impl_module *module;
++	struct spa_hook module_listener;
++
++	struct pw_core *core;
++	struct spa_hook core_proxy_listener;
++	struct spa_hook core_listener;
++
++	struct pw_properties *stream_props;
++	struct pw_stream *stream;
++	struct spa_hook stream_listener;
++	struct spa_audio_info_raw info;
++	uint32_t frame_size;
++
++	OboeShimStream *oboe_stream;
++	struct oboe_shim_ring ring;
++	int perf_mode;
++	int sharing_mode;
++	int buffer_bursts;
++	int32_t burst_frames;
++
++	struct spa_dll dll;
++	uint32_t target_latency;
++	double max_error;
++	uint32_t overrun_count;
++
++	unsigned int do_disconnect:1;
++	unsigned int overrun_warned:1;
++};
++
++static int spa_format_to_oboe(uint32_t format)
++{
++	switch (format) {
++	case SPA_AUDIO_FORMAT_S16:
++		return OBOE_SHIM_FORMAT_I16;
++	case SPA_AUDIO_FORMAT_F32:
++		return OBOE_SHIM_FORMAT_F32;
++	default:
++		return 0;
++	}
++}
++
++static uint32_t oboe_format_to_spa(int format)
++{
++	switch (format) {
++	case OBOE_SHIM_FORMAT_I16:
++		return SPA_AUDIO_FORMAT_S16;
++	case OBOE_SHIM_FORMAT_F32:
++		return SPA_AUDIO_FORMAT_F32;
++	default:
++		return SPA_AUDIO_FORMAT_UNKNOWN;
++	}
++}
++
++static int calc_frame_size(const struct spa_audio_info_raw *info)
++{
++	int res = info->channels;
++	switch (info->format) {
++	case SPA_AUDIO_FORMAT_S16:
++		return res * 2;
++	case SPA_AUDIO_FORMAT_F32:
++		return res * 4;
++	default:
++		return 0;
++	}
++}
++
++static void stream_destroy(void *d)
++{
++	struct impl *impl = d;
++	spa_hook_remove(&impl->stream_listener);
++	impl->stream = NULL;
++}
++
++static void stream_state_changed(void *d, enum pw_stream_state old,
++		enum pw_stream_state state, const char *error)
++{
++	struct impl *impl = d;
++	switch (state) {
++	case PW_STREAM_STATE_ERROR:
++	case PW_STREAM_STATE_UNCONNECTED:
++		__atomic_store_n(&impl->ring.active, 0, __ATOMIC_RELAXED);
++		pw_impl_module_schedule_destroy(impl->module);
++		break;
++	case PW_STREAM_STATE_STREAMING:
++		__atomic_store_n(&impl->ring.active, 1, __ATOMIC_RELAXED);
++		pw_log_info("oboe sink streaming: driving:%d",
++				pw_stream_is_driving(impl->stream));
++		break;
++	case PW_STREAM_STATE_PAUSED:
++		__atomic_store_n(&impl->ring.active, 0, __ATOMIC_RELAXED);
++		break;
++	default:
++		break;
++	}
++}
++
++static void update_rate(struct impl *impl, uint32_t filled)
++{
++	double error, corr;
++
++	error = (double)impl->target_latency - (double)filled;
++	error = SPA_CLAMPD(error, -impl->max_error, impl->max_error);
++
++	corr = spa_dll_update(&impl->dll, error);
++	pw_log_trace("oboe sink rate correction: error:%f corr:%f filled:%u target:%u",
++			error, corr, filled, impl->target_latency);
++
++	pw_stream_set_rate(impl->stream, 1.0 / corr);
++}
++
++static void oboe_sink_process(void *data)
++{
++	struct impl *impl = data;
++	struct pw_buffer *buf;
++	uint32_t i;
++
++	if (oboe_shim_is_disconnected(impl->oboe_stream)) {
++		pw_log_error("oboe stream disconnected");
++		pw_impl_module_schedule_destroy(impl->module);
++		return;
++	}
++
++	if ((buf = pw_stream_dequeue_buffer(impl->stream)) == NULL) {
++		pw_log_debug("out of buffers: %m");
++		return;
++	}
++
++	for (i = 0; i < buf->buffer->n_datas; i++) {
++		struct spa_data *d = &buf->buffer->datas[i];
++		uint32_t offs, size, index;
++		int32_t filled, to_write;
++		void *ptr;
++
++		offs = SPA_MIN(d->chunk->offset, d->maxsize);
++		size = SPA_MIN(d->chunk->size, d->maxsize - offs);
++		ptr = SPA_PTROFF(d->data, offs, void);
++
++		filled = spa_ringbuffer_get_write_index(&impl->ring.rb, &index);
++		to_write = (int32_t)size;
++
++		if (filled < 0) {
++			pw_log_warn("oboe sink: underrun write:%u filled:%d", index, filled);
++		} else if ((uint32_t)filled + size > OBOE_SHIM_RING_SIZE) {
++			impl->overrun_count++;
++			if (!impl->overrun_warned) {
++				pw_log_warn("oboe sink: overrun write:%u filled:%d + size:%u > max:%u"
++						" (further overruns logged only in closing summary)",
++						index, filled, size, OBOE_SHIM_RING_SIZE);
++				impl->overrun_warned = true;
++			}
++		} else {
++			update_rate(impl, filled / impl->frame_size);
++		}
++
++		if (to_write > (int32_t)OBOE_SHIM_RING_SIZE - filled)
++			to_write = (int32_t)OBOE_SHIM_RING_SIZE - filled;
++		if (to_write <= 0)
++			continue;
++
++		spa_ringbuffer_write_data(&impl->ring.rb, impl->ring.buffer,
++				OBOE_SHIM_RING_SIZE, index & OBOE_SHIM_RING_MASK,
++				ptr, (uint32_t)to_write);
++		spa_ringbuffer_write_update(&impl->ring.rb, index + to_write);
++	}
++	pw_stream_queue_buffer(impl->stream, buf);
++}
++
++static const struct pw_stream_events stream_events = {
++	PW_VERSION_STREAM_EVENTS,
++	.destroy = stream_destroy,
++	.state_changed = stream_state_changed,
++	.process = oboe_sink_process,
++};
++
++static void oboe_trigger_cb(void *data)
++{
++	struct impl *impl = data;
++	struct pw_stream *stream = __atomic_load_n(&impl->stream, __ATOMIC_ACQUIRE);
++	if (stream != NULL)
++		pw_stream_trigger_process(stream);
++}
++
++static int open_oboe_stream(struct impl *impl)
++{
++	int fmt, res;
++
++	fmt = spa_format_to_oboe(impl->info.format);
++	if (fmt == 0) {
++		pw_log_error("unsupported audio.format, only S16 and F32 are supported");
++		return -EINVAL;
++	}
++
++	spa_ringbuffer_init(&impl->ring.rb);
++	__atomic_store_n(&impl->ring.active, 0, __ATOMIC_RELAXED);
++
++	res = oboe_shim_open_output(&impl->oboe_stream, &impl->ring, (int32_t)impl->info.rate,
++			(int32_t)impl->info.channels, fmt, impl->perf_mode,
++			impl->sharing_mode, oboe_trigger_cb, impl);
++	if (res < 0 || impl->oboe_stream == NULL) {
++		pw_log_error("oboe_shim_open_output failed: %s",
++				oboe_shim_result_to_text(res));
++		return -EIO;
++	}
++
++	impl->info.rate = (uint32_t)oboe_shim_get_sample_rate(impl->oboe_stream);
++	impl->info.channels = (uint32_t)oboe_shim_get_channel_count(impl->oboe_stream);
++	impl->info.format = oboe_format_to_spa(oboe_shim_get_format(impl->oboe_stream));
++	impl->frame_size = calc_frame_size(&impl->info);
++
++	if (impl->info.format == SPA_AUDIO_FORMAT_UNKNOWN || impl->frame_size == 0) {
++		pw_log_error("oboe returned an unsupported format after opening the stream");
++		oboe_shim_stop_and_close(impl->oboe_stream);
++		impl->oboe_stream = NULL;
++		return -EIO;
++	}
++
++	pw_log_info("opened oboe playback stream: rate:%u channels:%u format:%s",
++			impl->info.rate, impl->info.channels,
++			spa_debug_type_find_name(spa_type_audio_format, impl->info.format));
++
++	{
++		int32_t burst = oboe_shim_get_frames_per_burst(impl->oboe_stream);
++		impl->burst_frames = burst;
++		if (burst > 0) {
++			int32_t requested = burst * impl->buffer_bursts;
++			int32_t got = oboe_shim_set_buffer_size(impl->oboe_stream, requested);
++			if (got < 0)
++				pw_log_warn("oboe_shim_set_buffer_size failed: %s",
++						oboe_shim_result_to_text(got));
++			else
++				pw_log_info("oboe buffer size: burst:%d requested:%d got:%d frames",
++						burst, requested, got);
++		} else {
++			pw_log_debug("oboe: frames-per-burst unavailable, skipping buffer size tuning");
++		}
++	}
++
++	if ((res = oboe_shim_request_start(impl->oboe_stream)) < 0) {
++		pw_log_error("oboe_shim_request_start failed: %s",
++				oboe_shim_result_to_text(res));
++		oboe_shim_stop_and_close(impl->oboe_stream);
++		impl->oboe_stream = NULL;
++		return -EIO;
++	}
++	return 0;
++}
++
++static int create_stream(struct impl *impl)
++{
++	int res;
++	uint32_t n_params;
++	const struct spa_pod *params[1];
++	uint8_t buffer[1024];
++	struct spa_pod_builder b;
++	struct pw_stream *stream;
++
++	stream = pw_stream_new(impl->core, "oboe-sink", impl->stream_props);
++	impl->stream_props = NULL;
++
++	if (stream == NULL)
++		return -errno;
++
++	pw_stream_add_listener(stream, &impl->stream_listener, &stream_events, impl);
++
++	n_params = 0;
++	spa_pod_builder_init(&b, buffer, sizeof(buffer));
++	params[n_params++] = spa_format_audio_raw_build(&b,
++			SPA_PARAM_EnumFormat, &impl->info);
++
++	if ((res = pw_stream_connect(stream,
++			PW_DIRECTION_INPUT,
++			PW_ID_ANY,
++			PW_STREAM_FLAG_AUTOCONNECT |
++			PW_STREAM_FLAG_MAP_BUFFERS |
++			PW_STREAM_FLAG_RT_PROCESS |
++			PW_STREAM_FLAG_TRIGGER,
++			params, n_params)) < 0) {
++		pw_stream_destroy(stream);
++		return res;
++	}
++
++	__atomic_store_n(&impl->stream, stream, __ATOMIC_RELEASE);
++
++	return 0;
++}
++
++static int parse_audio_info(const struct pw_properties *props, struct spa_audio_info_raw *info)
++{
++	return spa_audio_info_raw_init_dict_keys(info,
++			&SPA_DICT_ITEMS(
++				 SPA_DICT_ITEM(SPA_KEY_AUDIO_FORMAT, DEFAULT_FORMAT),
++				 SPA_DICT_ITEM(SPA_KEY_AUDIO_RATE, SPA_STRINGIFY(DEFAULT_RATE)),
++				 SPA_DICT_ITEM(SPA_KEY_AUDIO_CHANNELS, SPA_STRINGIFY(DEFAULT_CHANNELS)),
++				 SPA_DICT_ITEM(SPA_KEY_AUDIO_POSITION, DEFAULT_POSITION)),
++			&props->dict,
++			SPA_KEY_AUDIO_FORMAT,
++			SPA_KEY_AUDIO_RATE,
++			SPA_KEY_AUDIO_CHANNELS,
++			SPA_KEY_AUDIO_LAYOUT,
++			SPA_KEY_AUDIO_POSITION, NULL);
++}
++
++static int parse_perf_mode(const char *str)
++{
++	if (str == NULL || spa_streq(str, "low-latency"))
++		return OBOE_SHIM_PERF_LOW_LATENCY;
++	if (spa_streq(str, "power-saving"))
++		return OBOE_SHIM_PERF_POWER_SAVING;
++	if (spa_streq(str, "none"))
++		return OBOE_SHIM_PERF_NONE;
++	pw_log_warn("unknown oboe.performance-mode '%s', using low-latency", str);
++	return OBOE_SHIM_PERF_LOW_LATENCY;
++}
++
++static int parse_sharing_mode(const char *str)
++{
++	if (str == NULL || spa_streq(str, "shared"))
++		return OBOE_SHIM_SHARING_SHARED;
++	if (spa_streq(str, "exclusive"))
++		return OBOE_SHIM_SHARING_EXCLUSIVE;
++	pw_log_warn("unknown oboe.sharing-mode '%s', using shared", str);
++	return OBOE_SHIM_SHARING_SHARED;
++}
++
++static int parse_buffer_bursts(const char *str)
++{
++	int val;
++	if (str == NULL)
++		return DEFAULT_BUFFER_BURSTS;
++	val = atoi(str);
++	if (val < 1 || val > 8) {
++		pw_log_warn("invalid oboe.buffer-bursts '%s', using %d", str, DEFAULT_BUFFER_BURSTS);
++		return DEFAULT_BUFFER_BURSTS;
++	}
++	return val;
++}
++
++static void copy_props(struct impl *impl, struct pw_properties *props, const char *key)
++{
++	const char *str;
++	if ((str = pw_properties_get(props, key)) != NULL) {
++		if (pw_properties_get(impl->stream_props, key) == NULL)
++			pw_properties_set(impl->stream_props, key, str);
++	}
++}
++
++static void core_error(void *data, uint32_t id, int seq, int res, const char *message)
++{
++	struct impl *impl = data;
++	pw_log_error("error id:%u seq:%d res:%d (%s): %s",
++			id, seq, res, spa_strerror(res), message);
++	if (id == PW_ID_CORE && res == -EPIPE)
++		pw_impl_module_schedule_destroy(impl->module);
++}
++
++static const struct pw_core_events core_events = {
++	PW_VERSION_CORE_EVENTS,
++	.error = core_error,
++};
++
++static void core_destroy(void *d)
++{
++	struct impl *impl = d;
++	spa_hook_remove(&impl->core_listener);
++	spa_hook_remove(&impl->core_proxy_listener);
++	impl->core = NULL;
++	pw_impl_module_schedule_destroy(impl->module);
++}
++
++static const struct pw_proxy_events core_proxy_events = {
++	.destroy = core_destroy,
++};
++
++static void impl_destroy(struct impl *impl)
++{
++	if (impl->oboe_stream) {
++		int32_t xruns = oboe_shim_get_xrun_count(impl->oboe_stream);
++		int32_t underruns = oboe_shim_get_underrun_count(impl->oboe_stream);
++		pw_log_info("oboe sink closing: xrun count:%d ring underrun count:%d ring overrun count:%u",
++				xruns, underruns, impl->overrun_count);
++		oboe_shim_stop_and_close(impl->oboe_stream);
++		impl->oboe_stream = NULL;
++	}
++	if (impl->stream) {
++		struct pw_stream *stream = impl->stream;
++		__atomic_store_n(&impl->stream, NULL, __ATOMIC_RELEASE);
++		pw_stream_destroy(stream);
++	}
++	if (impl->core) {
++		spa_hook_remove(&impl->core_listener);
++		spa_hook_remove(&impl->core_proxy_listener);
++	}
++	if (impl->core && impl->do_disconnect)
++		pw_core_disconnect(impl->core);
++
++	if (impl->data_loop)
++		pw_context_release_loop(impl->context, impl->data_loop);
++
++	pw_properties_free(impl->stream_props);
++	pw_properties_free(impl->props);
++	free(impl);
++}
++
++static void module_destroy(void *data)
++{
++	struct impl *impl = data;
++	spa_hook_remove(&impl->module_listener);
++	impl_destroy(impl);
++}
++
++static const struct pw_impl_module_events module_events = {
++	PW_VERSION_IMPL_MODULE_EVENTS,
++	.destroy = module_destroy,
++};
++
++SPA_EXPORT
++int pipewire__module_init(struct pw_impl_module *module, const char *args)
++{
++	struct pw_context *context = pw_impl_module_get_context(module);
++	struct pw_properties *props = NULL;
++	struct impl *impl;
++	const char *str;
++	int res;
++
++	PW_LOG_TOPIC_INIT(mod_topic);
++
++	impl = calloc(1, sizeof(struct impl));
++	if (impl == NULL)
++		return -errno;
++
++	pw_log_debug("module %p: new %s", impl, args);
++
++	if (args == NULL)
++		args = "";
++
++	props = pw_properties_new_string(args);
++	if (props == NULL) {
++		res = -errno;
++		pw_log_error("can't create properties: %m");
++		goto error;
++	}
++	impl->props = props;
++
++	impl->stream_props = pw_properties_new(NULL, NULL);
++	if (impl->stream_props == NULL) {
++		res = -errno;
++		pw_log_error("can't create properties: %m");
++		goto error;
++	}
++
++	impl->module = module;
++	impl->context = context;
++	impl->data_loop = pw_context_acquire_loop(context, &props->dict);
++	if (impl->data_loop == NULL) {
++		res = -errno;
++		pw_log_error("can't acquire data loop: %m");
++		goto error;
++	}
++
++	pw_properties_set(props, PW_KEY_NODE_LOOP_NAME, impl->data_loop->name);
++	if (pw_properties_get(props, PW_KEY_MEDIA_CLASS) == NULL)
++		pw_properties_set(props, PW_KEY_MEDIA_CLASS, "Audio/Sink");
++	if (pw_properties_get(props, PW_KEY_NODE_NAME) == NULL)
++		pw_properties_set(props, PW_KEY_NODE_NAME, "oboe_sink");
++	if (pw_properties_get(props, PW_KEY_NODE_DESCRIPTION) == NULL)
++		pw_properties_set(props, PW_KEY_NODE_DESCRIPTION, "Oboe Sink");
++
++	if ((str = pw_properties_get(props, "stream.props")) != NULL)
++		pw_properties_update_string(impl->stream_props, str, strlen(str));
++
++	copy_props(impl, props, PW_KEY_NODE_LOOP_NAME);
++	copy_props(impl, props, PW_KEY_AUDIO_FORMAT);
++	copy_props(impl, props, PW_KEY_AUDIO_RATE);
++	copy_props(impl, props, PW_KEY_AUDIO_CHANNELS);
++	copy_props(impl, props, SPA_KEY_AUDIO_LAYOUT);
++	copy_props(impl, props, SPA_KEY_AUDIO_POSITION);
++	copy_props(impl, props, PW_KEY_NODE_NAME);
++	copy_props(impl, props, PW_KEY_NODE_DESCRIPTION);
++	copy_props(impl, props, PW_KEY_NODE_GROUP);
++	copy_props(impl, props, PW_KEY_NODE_LATENCY);
++	copy_props(impl, props, PW_KEY_MEDIA_CLASS);
++
++	if ((res = parse_audio_info(impl->stream_props, &impl->info)) < 0) {
++		pw_log_error("can't parse format: %s", spa_strerror(res));
++		goto error;
++	}
++	impl->frame_size = calc_frame_size(&impl->info);
++	if (impl->frame_size == 0) {
++		pw_log_error("unsupported audio format:%d channels:%d",
++				impl->info.format, impl->info.channels);
++		res = -EINVAL;
++		goto error;
++	}
++
++	impl->perf_mode = parse_perf_mode(pw_properties_get(props, "oboe.performance-mode"));
++	impl->sharing_mode = parse_sharing_mode(pw_properties_get(props, "oboe.sharing-mode"));
++	impl->buffer_bursts = parse_buffer_bursts(pw_properties_get(props, "oboe.buffer-bursts"));
++
++	if ((res = open_oboe_stream(impl)) < 0)
++		goto error;
++
++	{
++		int32_t burst = impl->burst_frames > 0 ? impl->burst_frames : 256;
++		int32_t ring_capacity_frames = OBOE_SHIM_RING_SIZE / impl->frame_size;
++
++		spa_dll_init(&impl->dll);
++		spa_dll_set_bw(&impl->dll, SPA_DLL_BW_MIN, 128, impl->info.rate);
++
++		impl->target_latency = (uint32_t)burst * impl->buffer_bursts;
++		if (impl->target_latency > (uint32_t)ring_capacity_frames / 2)
++			impl->target_latency = (uint32_t)ring_capacity_frames / 2;
++		impl->max_error = (double)impl->target_latency;
++
++		if (impl->info.rate != 0 &&
++				pw_properties_get(impl->stream_props, PW_KEY_NODE_LATENCY) == NULL)
++			pw_properties_setf(impl->stream_props, PW_KEY_NODE_LATENCY,
++					"%d/%u", burst, impl->info.rate);
++	}
++
++	if (impl->info.rate != 0)
++		pw_properties_setf(props, PW_KEY_NODE_RATE, "1/%u", impl->info.rate);
++	copy_props(impl, props, PW_KEY_NODE_RATE);
++
++	impl->core = pw_context_get_object(impl->context, PW_TYPE_INTERFACE_Core);
++	if (impl->core == NULL) {
++		str = pw_properties_get(props, PW_KEY_REMOTE_NAME);
++		impl->core = pw_context_connect(impl->context,
++				pw_properties_new(PW_KEY_REMOTE_NAME, str, NULL),
++				0);
++		impl->do_disconnect = true;
++	}
++	if (impl->core == NULL) {
++		res = -errno;
++		pw_log_error("can't connect: %m");
++		goto error;
++	}
++
++	pw_proxy_add_listener((struct pw_proxy*)impl->core,
++			&impl->core_proxy_listener, &core_proxy_events, impl);
++	pw_core_add_listener(impl->core, &impl->core_listener, &core_events, impl);
++
++	if ((res = create_stream(impl)) < 0)
++		goto error;
++
++	pw_impl_module_add_listener(module, &impl->module_listener, &module_events, impl);
++	pw_impl_module_update_properties(module, &SPA_DICT_INIT_ARRAY(module_props));
++
++	return 0;
++
++error:
++	impl_destroy(impl);
++	return res;
++}
+diff -ruN a/src/modules/module-raop-sink.c b/src/modules/module-raop-sink.c
+--- a/src/modules/module-raop-sink.c	2026-08-14 09:57:25.914408752 +0000
++++ b/src/modules/module-raop-sink.c	2026-08-14 09:57:26.571116866 +0000
+@@ -1344,10 +1344,10 @@
+ 		if (!spa_strstartswith(tokens[i], key))
+ 			continue;
+ 		p = tokens[i] + strlen(key);
+-		if ((s = rindex(p, '"')) == NULL)
++		if ((s = strrchr(p, '"')) == NULL)
+ 			continue;
+ 		*s = '\0';
+-		if ((s = index(p, '"')) == NULL)
++		if ((s = strchr(p, '"')) == NULL)
+ 			continue;
+ 		return s+1;
+ 	}
+diff -ruN a/src/modules/oboe-shim.cpp b/src/modules/oboe-shim.cpp
+--- a/src/modules/oboe-shim.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/src/modules/oboe-shim.cpp	2026-08-14 09:57:26.529122133 +0000
+@@ -0,0 +1,272 @@
++#include "oboe-shim.h"
++
++#include <cstring>
++#include <oboe/Oboe.h>
++
++#include <atomic>
++#include <memory>
++
++class RingBufferDataCallback : public oboe::AudioStreamDataCallback,
++				public oboe::AudioStreamErrorCallback {
++public:
++	explicit RingBufferDataCallback(struct oboe_shim_ring *ring, int32_t frame_bytes,
++			oboe_shim_trigger_func trigger_cb, void *trigger_data)
++		: mRing(ring), mFrameBytes(frame_bytes),
++		  mTriggerCb(trigger_cb), mTriggerData(trigger_data) {}
++
++	oboe::DataCallbackResult onAudioReady(oboe::AudioStream *stream,
++			void *audioData, int32_t numFrames) override
++	{
++		uint32_t index;
++		int32_t avail;
++		int32_t want = numFrames * mFrameBytes;
++
++		avail = spa_ringbuffer_get_read_index(&mRing->rb, &index);
++		if (avail <= 0) {
++			if (__atomic_load_n(&mRing->active, __ATOMIC_RELAXED))
++				mUnderrunCount.fetch_add(1, std::memory_order_relaxed);
++			memset(audioData, 0, want);
++		} else {
++			if (avail > want)
++				avail = want;
++
++			spa_ringbuffer_read_data(&mRing->rb, mRing->buffer,
++					OBOE_SHIM_RING_SIZE, index & OBOE_SHIM_RING_MASK,
++					audioData, avail);
++
++			if (avail < want)
++				memset(SPA_PTROFF(audioData, avail, void), 0, want - avail);
++
++			spa_ringbuffer_read_update(&mRing->rb, index + avail);
++		}
++
++		if (mTriggerCb != nullptr)
++			mTriggerCb(mTriggerData);
++
++		return oboe::DataCallbackResult::Continue;
++	}
++
++	void onErrorAfterClose(oboe::AudioStream * /* stream */, oboe::Result /* error */) override
++	{
++		mDisconnected.store(true, std::memory_order_relaxed);
++	}
++
++	int32_t getUnderrunCount() const
++	{
++		return mUnderrunCount.load(std::memory_order_relaxed);
++	}
++
++	bool isDisconnected() const
++	{
++		return mDisconnected.load(std::memory_order_relaxed);
++	}
++
++private:
++	struct oboe_shim_ring *mRing;
++	int32_t mFrameBytes;
++	oboe_shim_trigger_func mTriggerCb;
++	void *mTriggerData;
++	std::atomic<int32_t> mUnderrunCount{0};
++	std::atomic<bool> mDisconnected{false};
++};
++
++struct OboeShimStream {
++	std::shared_ptr<oboe::AudioStream> stream;
++	std::unique_ptr<RingBufferDataCallback> callback;
++};
++
++static oboe::AudioFormat shim_format_to_oboe(int format)
++{
++	switch (format) {
++	case OBOE_SHIM_FORMAT_I16:
++		return oboe::AudioFormat::I16;
++	case OBOE_SHIM_FORMAT_F32:
++		return oboe::AudioFormat::Float;
++	default:
++		return oboe::AudioFormat::Invalid;
++	}
++}
++
++static int oboe_format_to_shim(oboe::AudioFormat format)
++{
++	switch (format) {
++	case oboe::AudioFormat::I16:
++		return OBOE_SHIM_FORMAT_I16;
++	case oboe::AudioFormat::Float:
++		return OBOE_SHIM_FORMAT_F32;
++	default:
++		return 0;
++	}
++}
++
++static oboe::PerformanceMode shim_perf_to_oboe(int perf_mode)
++{
++	switch (perf_mode) {
++	case OBOE_SHIM_PERF_LOW_LATENCY:
++		return oboe::PerformanceMode::LowLatency;
++	case OBOE_SHIM_PERF_POWER_SAVING:
++		return oboe::PerformanceMode::PowerSaving;
++	case OBOE_SHIM_PERF_NONE:
++	default:
++		return oboe::PerformanceMode::None;
++	}
++}
++
++static oboe::SharingMode shim_sharing_to_oboe(int sharing_mode)
++{
++	return sharing_mode == OBOE_SHIM_SHARING_EXCLUSIVE ?
++		oboe::SharingMode::Exclusive : oboe::SharingMode::Shared;
++}
++
++static int32_t frame_bytes_for_format(int format, int32_t channels)
++{
++	switch (format) {
++	case OBOE_SHIM_FORMAT_I16:
++		return channels * 2;
++	case OBOE_SHIM_FORMAT_F32:
++		return channels * 4;
++	default:
++		return 0;
++	}
++}
++
++static int open_output_stream(OboeShimStream **out, struct oboe_shim_ring *ring,
++		int32_t sample_rate, int32_t channels, int format,
++		int perf_mode, int sharing_mode,
++		oboe_shim_trigger_func trigger_cb, void *trigger_data)
++{
++	if (out == nullptr || ring == nullptr)
++		return -1;
++	*out = nullptr;
++
++	oboe::AudioFormat oboe_fmt = shim_format_to_oboe(format);
++	if (oboe_fmt == oboe::AudioFormat::Invalid)
++		return -1;
++
++	int32_t frame_bytes = frame_bytes_for_format(format, channels);
++	if (frame_bytes <= 0)
++		return -1;
++
++	auto *shim = new (std::nothrow) OboeShimStream();
++	if (shim == nullptr)
++		return -1;
++
++	shim->callback = std::make_unique<RingBufferDataCallback>(ring, frame_bytes,
++			trigger_cb, trigger_data);
++
++	oboe::AudioStreamBuilder builder;
++	builder.setDirection(oboe::Direction::Output);
++	builder.setPerformanceMode(shim_perf_to_oboe(perf_mode));
++	builder.setSharingMode(shim_sharing_to_oboe(sharing_mode));
++	builder.setSampleRate(sample_rate);
++	builder.setChannelCount(channels);
++	builder.setFormat(oboe_fmt);
++	builder.setDataCallback(shim->callback.get());
++	builder.setErrorCallback(shim->callback.get());
++
++	oboe::Result result = builder.openStream(shim->stream);
++	if (result != oboe::Result::OK) {
++		delete shim;
++		return static_cast<int>(result);
++	}
++
++	*out = shim;
++	return 0;
++}
++
++extern "C" int oboe_shim_open_output(OboeShimStream **out, struct oboe_shim_ring *ring,
++		int32_t sample_rate, int32_t channels, int format,
++		int perf_mode, int sharing_mode,
++		oboe_shim_trigger_func trigger_cb, void *trigger_data)
++{
++	return open_output_stream(out, ring, sample_rate, channels, format,
++			perf_mode, sharing_mode, trigger_cb, trigger_data);
++}
++
++extern "C" int oboe_shim_request_start(OboeShimStream *s)
++{
++	if (s == nullptr || !s->stream)
++		return -1;
++	oboe::Result result = s->stream->requestStart();
++	return result == oboe::Result::OK ? 0 : static_cast<int>(result);
++}
++
++extern "C" int32_t oboe_shim_set_buffer_size(OboeShimStream *s, int32_t requested_frames)
++{
++	if (s == nullptr || !s->stream)
++		return -1;
++	oboe::ResultWithValue<int32_t> result =
++		s->stream->setBufferSizeInFrames(requested_frames);
++	if (!result)
++		return static_cast<int32_t>(result.error());
++	return result.value();
++}
++
++extern "C" int32_t oboe_shim_get_frames_per_burst(OboeShimStream *s)
++{
++	if (s == nullptr || !s->stream)
++		return 0;
++	return s->stream->getFramesPerBurst();
++}
++
++extern "C" int32_t oboe_shim_get_xrun_count(OboeShimStream *s)
++{
++	if (s == nullptr || !s->stream)
++		return -1;
++	oboe::ResultWithValue<int32_t> result = s->stream->getXRunCount();
++	if (!result)
++		return static_cast<int32_t>(result.error());
++	return result.value();
++}
++
++extern "C" int32_t oboe_shim_get_underrun_count(OboeShimStream *s)
++{
++	if (s == nullptr || !s->callback)
++		return -1;
++	return s->callback->getUnderrunCount();
++}
++
++extern "C" int oboe_shim_is_disconnected(OboeShimStream *s)
++{
++	if (s == nullptr || !s->callback)
++		return 0;
++	return s->callback->isDisconnected() ? 1 : 0;
++}
++
++extern "C" int32_t oboe_shim_get_sample_rate(OboeShimStream *s)
++{
++	if (s == nullptr || !s->stream)
++		return 0;
++	return s->stream->getSampleRate();
++}
++
++extern "C" int32_t oboe_shim_get_channel_count(OboeShimStream *s)
++{
++	if (s == nullptr || !s->stream)
++		return 0;
++	return s->stream->getChannelCount();
++}
++
++extern "C" int oboe_shim_get_format(OboeShimStream *s)
++{
++	if (s == nullptr || !s->stream)
++		return 0;
++	return oboe_format_to_shim(s->stream->getFormat());
++}
++
++extern "C" void oboe_shim_stop_and_close(OboeShimStream *s)
++{
++	if (s == nullptr)
++		return;
++	if (s->stream) {
++		s->stream->stop();
++		s->stream->close();
++		s->stream.reset();
++	}
++	delete s;
++}
++
++extern "C" const char *oboe_shim_result_to_text(int32_t result)
++{
++	return oboe::convertToText(static_cast<oboe::Result>(result));
++}
+diff -ruN a/src/modules/oboe-shim.h b/src/modules/oboe-shim.h
+--- a/src/modules/oboe-shim.h	1970-01-01 00:00:00.000000000 +0000
++++ b/src/modules/oboe-shim.h	2026-08-14 09:57:26.529078453 +0000
+@@ -0,0 +1,66 @@
++#ifndef OBOE_SHIM_H
++#define OBOE_SHIM_H
++
++#include <stdint.h>
++
++#include <spa/utils/ringbuffer.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct OboeShimStream OboeShimStream;
++
++enum {
++	OBOE_SHIM_FORMAT_I16 = 1,
++	OBOE_SHIM_FORMAT_F32 = 2,
++};
++
++enum {
++	OBOE_SHIM_PERF_NONE         = 0,
++	OBOE_SHIM_PERF_POWER_SAVING = 1,
++	OBOE_SHIM_PERF_LOW_LATENCY  = 2,
++};
++
++enum {
++	OBOE_SHIM_SHARING_SHARED    = 0,
++	OBOE_SHIM_SHARING_EXCLUSIVE = 1,
++};
++
++#define OBOE_SHIM_RING_SIZE (1u << 16)
++#define OBOE_SHIM_RING_MASK (OBOE_SHIM_RING_SIZE - 1)
++
++struct oboe_shim_ring {
++	struct spa_ringbuffer rb;
++	uint32_t active;
++	uint8_t buffer[OBOE_SHIM_RING_SIZE];
++};
++
++typedef void (*oboe_shim_trigger_func)(void *data);
++
++int oboe_shim_open_output(OboeShimStream **out, struct oboe_shim_ring *ring,
++		int32_t sample_rate, int32_t channels, int format,
++		int perf_mode, int sharing_mode,
++		oboe_shim_trigger_func trigger_cb, void *trigger_data);
++
++int oboe_shim_request_start(OboeShimStream *s);
++
++int32_t oboe_shim_set_buffer_size(OboeShimStream *s, int32_t requested_frames);
++int32_t oboe_shim_get_frames_per_burst(OboeShimStream *s);
++int32_t oboe_shim_get_xrun_count(OboeShimStream *s);
++int32_t oboe_shim_get_underrun_count(OboeShimStream *s);
++int oboe_shim_is_disconnected(OboeShimStream *s);
++
++int32_t oboe_shim_get_sample_rate(OboeShimStream *s);
++int32_t oboe_shim_get_channel_count(OboeShimStream *s);
++int oboe_shim_get_format(OboeShimStream *s);
++
++void oboe_shim_stop_and_close(OboeShimStream *s);
++
++const char *oboe_shim_result_to_text(int32_t result);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
