@@ -1,0 +1,12 @@
+TERMUX_PKG_HOMEPAGE="http://astyle.sourceforge.net/"
+TERMUX_PKG_DESCRIPTION="A free, fast and small automatic formatter for C, C++, C#, and Java source code"
+TERMUX_PKG_LICENSE="LGPL-3.0-only"
+TERMUX_PKG_MAINTAINER="@termux"
+TERMUX_PKG_VERSION="3.6.18"
+TERMUX_PKG_SRCURL="https://gitlab.com/saalen/astyle/-/archive/${TERMUX_PKG_VERSION}/astyle-${TERMUX_PKG_VERSION}.tar.gz"
+TERMUX_PKG_SHA256="3cf671a726e9b14e75fd9ad862dc6b5500f948a12700bc842e9bd4bc3a9a9915"
+TERMUX_PKG_AUTO_UPDATE=true
+TERMUX_PKG_DEPENDS="libc++"
+TERMUX_PKG_BUILD_DEPENDS="openjdk-21, wxwidgets"
+TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
+"
