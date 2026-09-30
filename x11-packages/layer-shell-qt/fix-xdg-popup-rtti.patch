@@ -1,0 +1,26 @@
+# Fix std::any RTTI failure when attaching layer-shell popups
+#
+# Based on FreeBSD ports commit 4b46b47d31da8d6b6d87bd27903b2d8056a53b22:
+# https://cgit.freebsd.org/ports/commit/?id=4b46b47d31da8d6b6d87bd27903b2d8056a53b22
+#
+diff --git a/src/qwaylandlayersurface.cpp b/src/qwaylandlayersurface.cpp
+index 1d12b05..1f40e88 100644
+--- a/src/qwaylandlayersurface.cpp
++++ b/src/qwaylandlayersurface.cpp
+@@ -119,10 +119,11 @@ void QWaylandLayerSurface::zwlr_layer_surface_v1_configure(uint32_t serial, uint
+ 
+ void QWaylandLayerSurface::attachPopup(QtWaylandClient::QWaylandShellSurface *popup)
+ {
+-    std::any anyRole = popup->surfaceRole();
++    auto window = popup->window();
++    auto shell = window ? window->shellIntegration() : nullptr;
+ 
+-    if (auto role = std::any_cast<::xdg_popup *>(&anyRole)) {
+-        get_popup(*role);
++    if (auto role = shell ? shell->nativeResourceForWindow("xdg_popup", window->window()) : nullptr) {
++        get_popup(static_cast<::xdg_popup *>(role));
+     } else {
+         qCWarning(LAYERSHELLQT) << "Cannot attach popup of unknown type";
+     }
+-- 
+2.43.0
