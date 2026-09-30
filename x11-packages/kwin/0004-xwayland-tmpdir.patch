@@ -1,0 +1,62 @@
+diff --git a/src/xwayland/lib/xwaylandsocket.cpp b/src/xwayland/lib/xwaylandsocket.cpp
+index aa2c000..ac9eb1f 100644
+--- a/src/xwayland/lib/xwaylandsocket.cpp
++++ b/src/xwayland/lib/xwaylandsocket.cpp
+@@ -68,14 +68,20 @@ int UnixSocketAddress::size() const
+     return m_buffer.size();
+ }
+ 
++static QString xTmpDirectory()
++{
++    const QByteArray dir = qgetenv("TMPDIR");
++    return dir.isEmpty() ? QStringLiteral("/tmp") : QFile::decodeName(dir);
++}
++
+ static QString lockFileNameForDisplay(int display)
+ {
+-    return QStringLiteral("/tmp/.X%1-lock").arg(display);
++    return xTmpDirectory() + QStringLiteral("/.X%1-lock").arg(display);
+ }
+ 
+ static QString socketFileNameForDisplay(int display)
+ {
+-    return QStringLiteral("/tmp/.X11-unix/X%1").arg(display);
++    return xTmpDirectory() + QStringLiteral("/.X11-unix/X%1").arg(display);
+ }
+ 
+ static bool tryLockFile(const QString &lockFileName)
+@@ -134,17 +140,18 @@ static int listen_helper(const QString &filePath, UnixSocketAddress::Type type,
+ 
+ static bool checkSocketsDirectory()
+ {
+-    struct stat info;
+-    const char *path = "/tmp/.X11-unix";
++    const QByteArray path = QFile::encodeName(xTmpDirectory() + QStringLiteral("/.X11-unix"));
+ 
+-    if (lstat(path, &info) != 0) {
+-        if (errno == ENOENT) {
+-            qCWarning(KWIN_XWL) << path << "does not exist. Please check your installation";
++    struct stat info;
++    if (lstat(path.constData(), &info) != 0) {
++        if (errno != ENOENT) {
++            qCWarning(KWIN_XWL, "Failed to stat %s: %s", path.constData(), strerror(errno));
++            return false;
++        }
++        if (mkdir(path.constData(), 01777) != 0 || lstat(path.constData(), &info) != 0) {
++            qCWarning(KWIN_XWL, "Failed to create %s: %s", path.constData(), strerror(errno));
+             return false;
+         }
+-
+-        qCWarning(KWIN_XWL, "Failed to stat %s: %s", path, strerror(errno));
+-        return false;
+     }
+ 
+     if (!S_ISDIR(info.st_mode)) {
+@@ -157,7 +164,6 @@ static bool checkSocketsDirectory()
+     }
+     if (!(info.st_mode & S_ISVTX)) {
+         qCWarning(KWIN_XWL) << path << "has no sticky bit on. Your system might be compromised!";
+-        return false;
+     }
+ 
+     return true;
