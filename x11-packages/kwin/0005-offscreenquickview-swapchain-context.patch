@@ -1,0 +1,22 @@
+--- a/src/effect/offscreenquickview.cpp
++++ b/src/effect/offscreenquickview.cpp
+@@ -361,7 +361,19 @@
+             }
+             d->m_surfaceNeedsReallocation = false;
+         }
++        // acquire() may create a slot, whose texture and framebuffer belong to
++        // the swapchain's context. Create them there: a framebuffer made in the
++        // Qt context above would be deleted in the swapchain's context later,
++        // taking whatever framebuffer has the same name there.
++        const bool otherContext = EglContext::currentContext() != d->m_swapchain->context().get();
++        if (otherContext && !d->m_swapchain->context()->makeCurrent()) {
++            return;
++        }
+         d->m_currentSlot = d->m_swapchain->acquire();
++        if (otherContext && !d->m_glcontext->makeCurrent(d->m_offscreenSurface.get())) {
++            d->m_currentSlot.reset();
++            return;
++        }
+         if (!d->m_currentSlot) {
+             d->m_glcontext->doneCurrent();
+             qCWarning(LIBKWINEFFECTS, "Acquire for OffscreenQuickView failed!");
