@@ -1,0 +1,11 @@
+--- a/wallpapers/image/imagepackage/contents/ui/ImageStackView.qml
++++ b/wallpapers/image/imagepackage/contents/ui/ImageStackView.qml
+@@ -136,7 +136,7 @@
+ 
+         wallpaperInterface.loading = false;
+ 
+-        if (pendingImage.status !== Image.Ready) {
++        if (pendingImage.status !== Image.Ready && pendingImage.status !== Image.Loading) {
+             mediaProxy.useSingleImageDefaults();
+         }
+ 
