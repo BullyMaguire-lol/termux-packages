@@ -1,26 +1,10 @@
-diff --git a/ksmserver/server.cpp b/ksmserver/server.cpp
-index 66debcd..dfe7e25 100644
---- a/ksmserver/server.cpp
-+++ b/ksmserver/server.cpp
-@@ -71,7 +71,6 @@
- #include <KIO/DesktopExecParser>
- #include <KService>
- 
--#include <KScreenLocker/KsldApp>
- 
- #include <krandom.h>
- #include <qstandardpaths.h>
-@@ -513,13 +513,6 @@ KSMServer::KSMServer(InitFlags flags)
-     , m_kwinInterface(new OrgKdeKWinSessionInterface(QStringLiteral("org.kde.KWin"), QStringLiteral("/Session"), QDBusConnection::sessionBus(), this))
-     , sockets{-1, -1}
- {
--    if (!flags.testFlag(InitFlag::NoLockScreen)) {
--        ScreenLocker::KSldApp::self()->initialize();
--        if (flags.testFlag(InitFlag::ImmediateLockScreen)) {
--            ScreenLocker::KSldApp::self()->lock(ScreenLocker::EstablishLock::Immediate);
--        }
--    }
--
-     if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) != 0) {
-         qFatal("Could not create socket pair, error %d (%s)", errno, strerror(errno));
-     }
+--- a/kcms/region_language/localegenhelper/CMakeLists.txt
++++ b/kcms/region_language/localegenhelper/CMakeLists.txt
+@@ -17,7 +17,6 @@
+ add_executable(plasma-localegen-helper ${localegen_Helper_SRCS})
+ target_link_libraries(plasma-localegen-helper
+     Qt::DBus
+-    PolkitQt6-1::Core
+     KF6::I18n
+ )
+ ecm_install_configured_files(INPUT org.kde.localegenhelper.service.in DESTINATION ${KDE_INSTALL_DBUSSYSTEMSERVICEDIR} @ONLY)

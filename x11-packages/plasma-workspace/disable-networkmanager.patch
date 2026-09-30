@@ -1,13 +1,12 @@
-diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3b97dc2..e59346e 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -99,10 +99,6 @@ set_package_properties(KF6KirigamiAddons PROPERTIES
+@@ -104,11 +104,6 @@
      TYPE RUNTIME
  )
  
 -# there's no NetworkManager on FreeBSD'
--if (LINUX)
+-cmake_dependent_option(BUILD_GEOTIMEZONED "Support location-based system time zone changes" TRUE "LINUX" FALSE)
+-if (BUILD_GEOTIMEZONED)
 -    find_package(KF6NetworkManagerQt ${KF6_MIN_VERSION} CONFIG REQUIRED)
 -endif()
  
