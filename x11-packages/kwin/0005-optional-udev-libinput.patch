@@ -1,0 +1,366 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 73f0fea..aba1e5b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -291,8 +291,9 @@ if (KWIN_BUILD_X11)
+ endif()
+ 
+ find_package(Libinput 1.28)
+-set_package_properties(Libinput PROPERTIES TYPE REQUIRED PURPOSE "Required for input handling on Wayland.")
+-if (Libinput_VERSION VERSION_GREATER_EQUAL 1.30)
++set_package_properties(Libinput PROPERTIES TYPE OPTIONAL PURPOSE "Required for input handling through the DRM backend. Not required on platforms without udev, such as Termux.")
++set(HAVE_LIBINPUT ${Libinput_FOUND})
++if (Libinput_FOUND AND Libinput_VERSION VERSION_GREATER_EQUAL 1.30)
+     set(HAVE_LIBINPUT_PLUGINS 1)
+ else()
+     set(HAVE_LIBINPUT_PLUGINS 0)
+@@ -305,9 +306,15 @@ find_package(UDev)
+ set_package_properties(UDev PROPERTIES
+     URL "https://www.freedesktop.org/wiki/Software/systemd/"
+     DESCRIPTION "Linux device library."
+-    TYPE REQUIRED
+-    PURPOSE "Required for input handling on Wayland."
++    TYPE OPTIONAL
++    PURPOSE "Required for udev-based GPU/input device discovery through the DRM backend. Not available on platforms such as Termux."
+ )
++set(HAVE_UDEV ${UDev_FOUND})
++
++set(HAVE_LIBINPUT_BACKEND 0)
++if (HAVE_LIBINPUT AND HAVE_UDEV)
++    set(HAVE_LIBINPUT_BACKEND 1)
++endif()
+ 
+ find_package(Libdrm 2.4.118)
+ set_package_properties(Libdrm PROPERTIES TYPE REQUIRED PURPOSE "Required for drm output on Wayland.")
+@@ -400,7 +407,7 @@ ecm_find_qmlmodule(org.kde.milou)
+ cmake_dependent_option(KWIN_BUILD_ACTIVITIES "Enable building of KWin with kactivities support" ON "PlasmaActivities_FOUND" OFF)
+ cmake_dependent_option(KWIN_BUILD_EIS "Enable building KWin with libeis support" ON "Libeis-1.0_FOUND" OFF)
+ cmake_dependent_option(KWIN_BUILD_QACCESSIBILITYCLIENT "Enable building KWin with libqaccessibilitysupport" ON "QAccessibilityClient6_FOUND" OFF)
+-cmake_dependent_option(KWIN_BUILD_GAMECONTROLLER "Enable building of KWin Game Controller functionality" ON "libevdev_FOUND" OFF)
++cmake_dependent_option(KWIN_BUILD_GAMECONTROLLER "Enable building of KWin Game Controller functionality" ON "libevdev_FOUND;HAVE_UDEV" OFF)
+ 
+ include_directories(BEFORE
+     ${CMAKE_CURRENT_BINARY_DIR}/src/wayland
+diff --git a/autotests/CMakeLists.txt b/autotests/CMakeLists.txt
+index 714e288..56166c4 100644
+--- a/autotests/CMakeLists.txt
++++ b/autotests/CMakeLists.txt
+@@ -2,7 +2,9 @@ add_definitions(-DKWIN_UNIT_TEST)
+ remove_definitions(-DQT_USE_QSTRINGBUILDER)
+ add_subdirectory(effect)
+ add_subdirectory(integration)
+-add_subdirectory(libinput)
++if (HAVE_LIBINPUT_BACKEND)
++    add_subdirectory(libinput)
++endif()
+ add_subdirectory(wayland)
+ # drm autotests are broken on FreeBSD for yet unknown reasons
+ # As the test isn't doing anything platform specific, only run it on Linux
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index ac1a3a5..8b0435a 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -278,7 +278,6 @@ target_link_libraries(kwin
+         KDecoration3::KDecoration
+         KDecoration3::KDecoration3Private
+ 
+-        UDev::UDev
+         XKB::XKB
+         EGL::EGL
+         epoxy::epoxy
+@@ -292,6 +291,10 @@ if (TARGET K::KGlobalAccelD)
+     target_link_libraries(kwin PRIVATE K::KGlobalAccelD)
+ endif()
+ 
++if (HAVE_UDEV)
++    target_link_libraries(kwin PRIVATE UDev::UDev)
++endif()
++
+ if (KWIN_BUILD_X11)
+     target_sources(kwin
+         PRIVATE
+diff --git a/src/backends/CMakeLists.txt b/src/backends/CMakeLists.txt
+index e94a1c6..0400748 100644
+--- a/src/backends/CMakeLists.txt
++++ b/src/backends/CMakeLists.txt
+@@ -1,6 +1,8 @@
+ add_subdirectory(drm)
+ add_subdirectory(fakeinput)
+-add_subdirectory(libinput)
++if (HAVE_LIBINPUT_BACKEND)
++    add_subdirectory(libinput)
++endif()
+ add_subdirectory(virtual)
+ add_subdirectory(wayland)
+ if (X11_XCB_FOUND)
+diff --git a/src/backends/drm/drm_backend.cpp b/src/backends/drm/drm_backend.cpp
+index 770f7f0..d388759 100644
+--- a/src/backends/drm/drm_backend.cpp
++++ b/src/backends/drm/drm_backend.cpp
+@@ -10,7 +10,9 @@
+ 
+ #include "config-kwin.h"
+ 
++#if HAVE_LIBINPUT_BACKEND
+ #include "backends/libinput/libinputbackend.h"
++#endif
+ #include "core/gpumanager.h"
+ #include "core/outputconfiguration.h"
+ #include "core/renderdevice.h"
+@@ -292,7 +294,11 @@ void DrmBackend::updateOutputs(DrmGpu *onlyUpdate)
+ 
+ std::unique_ptr<InputBackend> DrmBackend::createInputBackend()
+ {
++#if HAVE_LIBINPUT_BACKEND
+     return std::make_unique<LibinputBackend>(m_session);
++#else
++    return nullptr;
++#endif
+ }
+ 
+ std::unique_ptr<QPainterBackend> DrmBackend::createQPainterBackend()
+diff --git a/src/config-kwin.h.cmake b/src/config-kwin.h.cmake
+index 58188c0..3fc35eb 100644
+--- a/src/config-kwin.h.cmake
++++ b/src/config-kwin.h.cmake
+@@ -31,5 +31,8 @@ constexpr QLatin1StringView LIBEXEC_DIR("${CMAKE_INSTALL_FULL_LIBEXECDIR}");
+ #cmakedefine01 HAVE_DL_LIBRARY
+ #cmakedefine01 HAVE_LIBDRM_FAUX
+ #cmakedefine01 HAVE_LIBINPUT_PLUGINS
++#cmakedefine01 HAVE_UDEV
++#cmakedefine01 HAVE_LIBINPUT
++#cmakedefine01 HAVE_LIBINPUT_BACKEND
+ 
+ constexpr QLatin1StringView XWAYLAND_SESSION_SCRIPTS("${XWAYLAND_SESSION_SCRIPTS}");
+diff --git a/src/core/gpumanager.cpp b/src/core/gpumanager.cpp
+index d56688f..76669c3 100644
+--- a/src/core/gpumanager.cpp
++++ b/src/core/gpumanager.cpp
+@@ -76,12 +76,17 @@ GpuManager::GpuManager()
+     , m_udmabufDevId(getDevId(m_udmabuf))
+     , m_udev(std::make_unique<Udev>())
+     , m_udevMonitor(m_udev->createMonitor())
+-    , m_udevNotifier(std::make_unique<QSocketNotifier>(m_udevMonitor->fd(), QSocketNotifier::Read))
+     , m_explicitRenderNodes(qEnvironmentVariableIsSet("KWIN_RENDER_NODES") ? splitPathList(qEnvironmentVariable("KWIN_RENDER_NODES")) : std::optional<QStringList>())
+ {
+-    m_udevMonitor->filterSubsystemDevType("drm");
+-    connect(m_udevNotifier.get(), &QSocketNotifier::activated, this, &GpuManager::handleUdevEvent);
+-    m_udevMonitor->enable();
++    if (m_udevMonitor) {
++        const int fd = m_udevMonitor->fd();
++        if (fd != -1) {
++            m_udevNotifier = std::make_unique<QSocketNotifier>(fd, QSocketNotifier::Read);
++            m_udevMonitor->filterSubsystemDevType("drm");
++            connect(m_udevNotifier.get(), &QSocketNotifier::activated, this, &GpuManager::handleUdevEvent);
++            m_udevMonitor->enable();
++        }
++    }
+     scanForRenderDevices();
+ }
+ 
+diff --git a/src/core/gpumanager.h b/src/core/gpumanager.h
+index 03be944..7ca88de 100644
+--- a/src/core/gpumanager.h
++++ b/src/core/gpumanager.h
+@@ -67,9 +67,9 @@ private:
+ 
+     const FileDescriptor m_udmabuf;
+     const std::optional<dev_t> m_udmabufDevId;
+-    const std::unique_ptr<Udev> m_udev;
+-    const std::unique_ptr<UdevMonitor> m_udevMonitor;
+-    const std::unique_ptr<QSocketNotifier> m_udevNotifier;
++    std::unique_ptr<Udev> m_udev;
++    std::unique_ptr<UdevMonitor> m_udevMonitor;
++    std::unique_ptr<QSocketNotifier> m_udevNotifier;
+     const std::optional<QStringList> m_explicitRenderNodes;
+     std::vector<std::unique_ptr<RenderDevice>> m_renderDevices;
+     QHash<dev_t, RenderDevice *> m_compatibleDeviceMap;
+diff --git a/src/tabletmodemanager.cpp b/src/tabletmodemanager.cpp
+index 5e49092..1bbca2e 100644
+--- a/src/tabletmodemanager.cpp
++++ b/src/tabletmodemanager.cpp
+@@ -8,7 +8,10 @@
+ 
+ #include "tabletmodemanager.h"
+ 
++#include "config-kwin.h"
++#if HAVE_LIBINPUT_BACKEND
+ #include "backends/libinput/device.h"
++#endif
+ #include "core/inputdevice.h"
+ #include "input.h"
+ #include "input_event.h"
+@@ -22,6 +25,7 @@ namespace KWin
+ 
+ static bool blocksTabletMode(InputDevice *device)
+ {
++#if HAVE_LIBINPUT_BACKEND
+     if (auto libinputDevice = qobject_cast<LibInput::Device *>(device)) {
+         bool ignore = false;
+         if (auto udev = libinput_device_get_udev_device(libinputDevice->device()); udev) {
+@@ -30,6 +34,9 @@ static bool blocksTabletMode(InputDevice *device)
+         }
+         return !ignore;
+     }
++#else
++    Q_UNUSED(device)
++#endif
+ 
+     return false;
+ }
+diff --git a/src/utils/udev.cpp b/src/utils/udev.cpp
+index f4cf49d..8569d29 100644
+--- a/src/utils/udev.cpp
++++ b/src/utils/udev.cpp
+@@ -7,6 +7,7 @@
+     SPDX-License-Identifier: GPL-2.0-or-later
+ */
+ #include "udev.h"
++#include "config-kwin.h"
+ #include "utils/common.h"
+ // Qt
+ #include <QByteArray>
+@@ -14,6 +15,8 @@
+ // system
+ #include <cerrno>
+ #include <functional>
++
++#if HAVE_UDEV
+ #include <libudev.h>
+ 
+ namespace KWin
+@@ -316,3 +319,134 @@ std::unique_ptr<UdevDevice> UdevMonitor::getDevice()
+ }
+ 
+ }
++
++#else
++
++namespace KWin
++{
++
++Udev::Udev()
++    : m_udev(nullptr)
++{
++}
++
++Udev::~Udev()
++{
++}
++
++std::vector<std::unique_ptr<UdevDevice>> Udev::listGPUs()
++{
++    return {};
++}
++
++std::vector<std::unique_ptr<UdevDevice>> Udev::listRenderNodes()
++{
++    return {};
++}
++
++std::unique_ptr<UdevDevice> Udev::deviceFromSyspath(const char *syspath)
++{
++    Q_UNUSED(syspath)
++    return nullptr;
++}
++
++std::unique_ptr<UdevMonitor> Udev::createMonitor()
++{
++    return nullptr;
++}
++
++UdevDevice::UdevDevice(udev_device *device)
++    : m_device(device)
++{
++}
++
++UdevDevice::~UdevDevice()
++{
++}
++
++QByteArrayView UdevDevice::sysName() const
++{
++    return {};
++}
++
++QString UdevDevice::devNode() const
++{
++    return {};
++}
++
++dev_t UdevDevice::devNum() const
++{
++    return 0;
++}
++
++const char *UdevDevice::property(const char *key)
++{
++    Q_UNUSED(key)
++    return nullptr;
++}
++
++QMap<QByteArray, QByteArray> UdevDevice::properties() const
++{
++    return {};
++}
++
++bool UdevDevice::hasProperty(const char *key, const char *value)
++{
++    Q_UNUSED(key)
++    Q_UNUSED(value)
++    return false;
++}
++
++bool UdevDevice::isBootVga() const
++{
++    return false;
++}
++
++QString UdevDevice::seat() const
++{
++    return QStringLiteral("seat0");
++}
++
++QString UdevDevice::action() const
++{
++    return {};
++}
++
++bool UdevDevice::isHotpluggable() const
++{
++    return false;
++}
++
++UdevMonitor::UdevMonitor(Udev *udev)
++    : m_monitor(nullptr)
++{
++    Q_UNUSED(udev)
++}
++
++UdevMonitor::~UdevMonitor()
++{
++}
++
++int UdevMonitor::fd() const
++{
++    return -1;
++}
++
++void UdevMonitor::filterSubsystemDevType(const char *subSystem, const char *devType)
++{
++    Q_UNUSED(subSystem)
++    Q_UNUSED(devType)
++}
++
++void UdevMonitor::enable()
++{
++}
++
++std::unique_ptr<UdevDevice> UdevMonitor::getDevice()
++{
++    return nullptr;
++}
++
++}
++
++#endif
