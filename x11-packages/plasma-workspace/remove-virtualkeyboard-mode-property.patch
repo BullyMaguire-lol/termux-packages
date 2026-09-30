@@ -1,8 +1,20 @@
+diff --git a/components/keyboardlayout/virtualkeyboard.cpp b/components/keyboardlayout/virtualkeyboard.cpp
+index dd4d6ed..918b873 100644
+--- a/components/keyboardlayout/virtualkeyboard.cpp
++++ b/components/keyboardlayout/virtualkeyboard.cpp
+@@ -18,7 +18,6 @@ KwinVirtualKeyboardInterface::KwinVirtualKeyboardInterface()
+     // Should be refactored to add a signal for willShowOnActive in KWin.
+     connect(this, &OrgKdeKwinVirtualKeyboardInterface::availableChanged, this, &KwinVirtualKeyboardInterface::refreshWillShowOnActive);
+     connect(this, &OrgKdeKwinVirtualKeyboardInterface::activeClientSupportsTextInputChanged, this, &KwinVirtualKeyboardInterface::refreshWillShowOnActive);
+-    connect(this, &OrgKdeKwinVirtualKeyboardInterface::modeChanged, this, &KwinVirtualKeyboardInterface::refreshWillShowOnActive);
+     refreshWillShowOnActive();
+ }
+ 
 diff --git a/components/keyboardlayout/virtualkeyboard.h b/components/keyboardlayout/virtualkeyboard.h
-index 4caab11..f0356ec 100644
+index 85d937b..76605bb 100644
 --- a/components/keyboardlayout/virtualkeyboard.h
 +++ b/components/keyboardlayout/virtualkeyboard.h
-@@ -17,7 +17,6 @@ class KwinVirtualKeyboardInterface : public OrgKdeKwinVirtualKeyboardInterface
+@@ -18,7 +18,6 @@ class KwinVirtualKeyboardInterface : public OrgKdeKwinVirtualKeyboardInterface
      QML_SINGLETON
  
      Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged)
