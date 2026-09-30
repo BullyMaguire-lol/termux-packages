@@ -1,6 +1,6 @@
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -76,7 +76,7 @@
+@@ -75,7 +75,7 @@ find_package(PlasmaActivitiesStats ${PROJECT_DEP_VERSION} REQUIRED)
  find_package(KSysGuard ${PROJECT_DEP_VERSION} CONFIG)
  set_package_properties(KSysGuard PROPERTIES
      DESCRIPTION "Components to monitor the system"
@@ -9,17 +9,16 @@
  )
  find_package(KF6Screen ${PROJECT_DEP_VERSION} CONFIG REQUIRED)
  find_package(LayerShellQt ${PROJECT_DEP_VERSION} CONFIG REQUIRED)
-@@ -127,8 +127,7 @@
-    TYPE REQUIRED)
+@@ -125,7 +125,7 @@ set_package_properties(QALCULATE PROPERTIES
  pkg_check_modules(DBus dbus-1 REQUIRED IMPORTED_TARGET)
  
--find_package(KWinDBusInterface CONFIG REQUIRED)
+ find_package(KWinDBusInterface CONFIG REQUIRED)
 -find_package(ScreenSaverDBusInterface CONFIG REQUIRED)
 +find_package(KWinX11DBusInterface CONFIG REQUIRED)
  
- find_package(KF6Holidays)
- set_package_properties(KF6Holidays PROPERTIES DESCRIPTION "Holidays provider for Plasma calendar"
-@@ -207,8 +206,6 @@
+ # Used in kcm_autostart
+ pkg_check_modules(SYSTEMD "systemd")
+@@ -200,8 +200,6 @@ if(WITH_X11)
  
      find_package(XCB MODULE REQUIRED COMPONENTS AUX XCB CURSOR RANDR IMAGE)
      set_package_properties(XCB PROPERTIES TYPE REQUIRED)
@@ -28,7 +27,7 @@
  else()
      set(HAVE_X11 0)
      set(HAVE_XCURSOR 0)
-@@ -324,7 +324,7 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+@@ -320,7 +318,7 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
      add_feature_info(GLIBC_LOCALE_GEN GLIBC_LOCALE_GEN "Generate glibc locales")
      add_feature_info(GLIBC_LOCALE_PREGENERATED GLIBC_LOCALE_PREGENERATED "glibc locales are pregenerated")
      ################## Find libraries ###################
