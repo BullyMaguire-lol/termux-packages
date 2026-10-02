@@ -10,6 +10,7 @@ LICENSES/LicenseRef-KDE-Accepted-LGPL.txt
 LICENSES/MIT.txt"
 TERMUX_PKG_MAINTAINER="@termux"
 TERMUX_PKG_VERSION="6.30.0"
+TERMUX_PKG_REVISION=1
 TERMUX_PKG_SRCURL="https://download.kde.org/stable/frameworks/${TERMUX_PKG_VERSION%.*}/kwindowsystem-${TERMUX_PKG_VERSION}.tar.xz"
 TERMUX_PKG_SHA256=639a501b877446b19905399d27e2be2b6ebb0bb481abe3209dc4d535a12e12ca
 TERMUX_PKG_AUTO_UPDATE=true
@@ -20,3 +21,11 @@ TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -DKDE_INSTALL_QMLDIR=lib/qt6/qml
 -DKDE_INSTALL_QTPLUGINDIR=lib/qt6/plugins
 "
+
+termux_step_pre_configure() {
+# Put libKF6WindowSystem in the Android linker's global group, so its
+# plugins use the library's copy of the KWindowSystemPrivateV2..V5 type info
+# (otherwise dynamic_cast fails across the plugin boundary and
+# KWaylandExtras::xdgActivationToken() returns an empty token).
+	LDFLAGS+=" -Wl,-z,global"
+}
