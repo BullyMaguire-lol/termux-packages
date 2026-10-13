@@ -1,0 +1,9 @@
+TERMUX_PKG_HOMEPAGE="https://github.com/illiliti/libudev-zero"
+TERMUX_PKG_DESCRIPTION="libudev replacement to use whatever device manager"
+TERMUX_PKG_LICENSE="ISC"
+TERMUX_PKG_MAINTAINER="@termux"
+TERMUX_PKG_VERSION="1.0.5"
+TERMUX_PKG_SRCURL="https://github.com/illiliti/libudev-zero/archive/refs/tags/${TERMUX_PKG_VERSION}.tar.gz"
+TERMUX_PKG_SHA256="bf4372f79ddbe6b0e266a3d2994ffac7018a7edf4f87632aecb5176565d96138"
+TERMUX_PKG_AUTO_UPDATE=true
+TERMUX_PKG_DEPENDS="libc++"
