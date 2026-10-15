@@ -1,12 +1,13 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index e79d89d..58d38e9 100644
+index 8729073..0e1378a 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -33,9 +33,6 @@ find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS CoreAddons Solid KIO Cra
+@@ -34,10 +34,6 @@ find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS CoreAddons Solid KIO Cra
  find_package(KSysGuard ${PROJECT_DEP_VERSION} REQUIRED)
  
  # there's no NetworkManager on FreeBSD'
--if (LINUX)
+-cmake_dependent_option(WITH_NM "Provide improved backend for network statistics" TRUE "LINUX" FALSE)
+-if (WITH_NM)
 -    find_package(KF6NetworkManagerQt ${KF6_MIN_VERSION} CONFIG REQUIRED)
 -endif()
  
