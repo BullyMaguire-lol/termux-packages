@@ -1,0 +1,15 @@
+--- a/src/modules/module-raop-sink.c
++++ b/src/modules/module-raop-sink.c
+@@ -1375,10 +1375,10 @@
+ 		if (!spa_strstartswith(tokens[i], key))
+ 			continue;
+ 		p = tokens[i] + strlen(key);
+-		if ((s = rindex(p, '"')) == NULL)
++		if ((s = strrchr(p, '"')) == NULL)
+ 			continue;
+ 		*s = '\0';
+-		if ((s = index(p, '"')) == NULL)
++		if ((s = strchr(p, '"')) == NULL)
+ 			continue;
+ 		return s+1;
+ 	}

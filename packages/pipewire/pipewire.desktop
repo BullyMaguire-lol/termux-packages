@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=PipeWire
+Comment=Start the PipeWire media server and its session manager
+Exec=pipewire-launcher
+NoDisplay=true

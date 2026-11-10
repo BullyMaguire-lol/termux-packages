@@ -1,0 +1,47 @@
+#!@TERMUX_PREFIX@/bin/sh
+# Starts what is missing of PipeWire, WirePlumber and (when the pipewire-pulse
+# package is installed) pipewire-pulse, then exits. It runs
+# - at login, from $PREFIX/etc/xdg/autostart/pipewire.desktop, and
+# - with pipewire-pulse installed, whenever a program using the PulseAudio
+#   library finds no sound server: the library starts this script instead of
+#   pulseaudio (autospawn; it passes --start, which needs nothing here).
+# PipeWire and WirePlumber outlive the session, so a new login can find them.
+
+run=${XDG_RUNTIME_DIR:-@TERMUX_PREFIX@/tmp}
+
+up() {	# command...: wait up to 5 s for it to succeed
+	i=0
+	until "$@" >/dev/null 2>&1; do
+		i=$((i + 1))
+		[ "$i" -gt 50 ] && return 1
+		sleep 0.1
+	done
+}
+
+start() {	# program: in the background, detached from the caller's terminal or
+	# pipes (like a daemon); its messages go to $run/<program>.log
+	"$1" </dev/null >"$run/$1.log" 2>&1 &
+}
+
+pulse_up() {	# a PulseAudio server (pipewire-pulse or pulseaudio) answers
+	kill -0 "$(cat "$run/pulse/pid" 2>/dev/null)" 2>/dev/null && [ -S "$run/pulse/native" ]
+}
+
+# Login autostart and a program's autospawn can run at the same time; one at
+# a time, so nothing is started twice (a lock left by a killed run expires).
+lock=$run/pipewire-launcher.lock
+up mkdir "$lock" || { rmdir "$lock" 2>/dev/null; mkdir "$lock" || exit 1; }
+trap 'rmdir "$lock"' EXIT
+
+if ! pw-cli info 0 >/dev/null 2>&1; then
+	start pipewire
+	up pw-cli info 0 || exit 1
+fi
+
+pw-cli ls Client 2>/dev/null | grep -q 'application.name = "WirePlumber"' || start wireplumber
+
+if command -v pipewire-pulse >/dev/null && ! pulse_up; then
+	start pipewire-pulse
+	up pulse_up || exit 1
+fi
+exit 0

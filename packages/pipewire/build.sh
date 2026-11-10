@@ -4,11 +4,11 @@ TERMUX_PKG_LICENSE="MIT, LGPL-2.1, LGPL-3.0, GPL-2.0"
 TERMUX_PKG_LICENSE_FILE="COPYING, LICENSE"
 TERMUX_PKG_MAINTAINER="@termux"
 TERMUX_PKG_VERSION="1.4.9"
-TERMUX_PKG_REVISION=2
+TERMUX_PKG_REVISION=3
 TERMUX_PKG_SRCURL="https://gitlab.freedesktop.org/pipewire/pipewire/-/archive/${TERMUX_PKG_VERSION}/pipewire-${TERMUX_PKG_VERSION}.tar.bz2"
 TERMUX_PKG_SHA256=e606aa3f6d53ec4c56fe35034d35cadfe0bbea1a5275e4e006dd7d1abaec6b92
 TERMUX_PKG_AUTO_UPDATE=true
-TERMUX_PKG_DEPENDS="ffmpeg, glib, libc++, lua54, libopus, libsndfile, libwebrtc-audio-processing, lilv, ncurses, openssl, pulseaudio, readline"
+TERMUX_PKG_DEPENDS="alsa-lib, ffmpeg, glib, libc++, lua54, libopus, libsndfile, libwebrtc-audio-processing, lilv, ncurses, openssl, pulseaudio, readline"
 
 # 'media-session' session-managers is disabled as it requires alsa.
 # Since we are building without x11, dbus is disabled.
@@ -18,7 +18,7 @@ TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 -Dtests=disabled
 -Dexamples=disabled
 -Dpipewire-alsa=disabled
--Dalsa=disabled
+-Dalsa=enabled
 -Dpipewire-jack=disabled
 -Djack=disabled
 -Ddbus=disabled
@@ -32,7 +32,21 @@ termux_step_pre_configure() {
 	termux_setup_glib_cross_pkg_config_wrapper
 
 	sed -i "s/'-Werror=strict-prototypes',//" ${TERMUX_PKG_SRCDIR}/meson.build
-	CFLAGS+=" -Dindex=strchr -Drindex=strrchr"
 	sed "s|@TERMUX_PKG_BUILDER_DIR@|${TERMUX_PKG_BUILDER_DIR}|g" \
 		"${TERMUX_PKG_BUILDER_DIR}"/reallocarray.diff | patch -p1
+}
+
+termux_step_post_make_install() {
+	# No systemd starts PipeWire: pipewire-launcher does, at login of a desktop
+	# session (XDG autostart) and, from the pipewire-pulse subpackage, when a
+	# PulseAudio client finds no server (libpulse's autospawn).
+	install -Dm700 "$TERMUX_PKG_BUILDER_DIR/pipewire-launcher" \
+		"$TERMUX_PREFIX/bin/pipewire-launcher"
+	sed -i "s|@TERMUX_PREFIX@|$TERMUX_PREFIX|g" "$TERMUX_PREFIX/bin/pipewire-launcher"
+	install -Dm600 "$TERMUX_PKG_BUILDER_DIR/pipewire.desktop" \
+		"$TERMUX_PREFIX/etc/xdg/autostart/pipewire.desktop"
+	install -Dm600 "$TERMUX_PKG_BUILDER_DIR/pulse-client.conf" \
+		"$TERMUX_PREFIX/etc/pulse/client.conf.d/50-pipewire-pulse.conf"
+	sed -i "s|@TERMUX_PREFIX@|$TERMUX_PREFIX|g" \
+		"$TERMUX_PREFIX/etc/pulse/client.conf.d/50-pipewire-pulse.conf"
 }

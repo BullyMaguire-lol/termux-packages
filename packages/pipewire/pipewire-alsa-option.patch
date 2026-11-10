@@ -1,0 +1,11 @@
+--- a/meson.build
++++ b/meson.build
+@@ -572,7 +572,7 @@
+   subdir('pipewire-v4l2')
+ endif
+ 
+-if alsa_dep.found()
++if alsa_dep.found() and get_option('pipewire-alsa').allowed()
+   subdir('pipewire-alsa/alsa-plugins')
+   subdir('pipewire-alsa/conf')
+   subdir('pipewire-alsa/tests')
