@@ -1,0 +1,84 @@
+name: Pacman packages
+
+on:
+  # pushing a branch to 'pacman-build' builds it (git push origin dev/kwin-wayland:pacman-build)
+  push:
+    branches:
+    - pacman-build
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Space-separated package names (empty = every package this branch changed against Termux master)"
+        required: false
+        default: ""
+
+permissions: {} # none
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+    steps:
+    - name: Clone repository
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Choose packages
+      env:
+        INPUT_PACKAGES: ${{ github.event.inputs.packages }}
+      run: |
+        if [ -n "$INPUT_PACKAGES" ]; then
+          pkgs="$INPUT_PACKAGES"
+        else
+          git fetch --no-tags https://github.com/termux/termux-packages master
+          pkgs=$(git diff --name-only FETCH_HEAD...HEAD -- packages x11-packages root-packages \
+            | cut -d/ -f2 | sort -u | while read -r p; do
+                for r in packages x11-packages root-packages; do
+                  [ -d "$r/$p" ] && echo "$p"
+                done
+              done | sort -u | tr '\n' ' ')
+        fi
+        echo "packages: $pkgs"
+        echo "PACKAGES=$pkgs" >> "$GITHUB_ENV"
+
+    - name: Take dependencies from Termux's pacman repos
+      run: |
+        # like termux-pacman/termux-packages: dependencies come as pacman packages
+        # from its repos (this change is for this run only, never committed)
+        jq '.pkg_format = "pacman"
+            | .packages.distribution = "main" | .packages.component = "main"
+            | .packages.url = "https://service.termux-pacman.dev/main"
+            | ."root-packages".distribution = "root" | ."root-packages".component = "root"
+            | ."root-packages".url = "https://service.termux-pacman.dev/root"
+            | ."x11-packages".distribution = "x11" | ."x11-packages".component = "x11"
+            | ."x11-packages".url = "https://service.termux-pacman.dev/x11"' repo.json > repo.json.new
+        mv repo.json.new repo.json
+        cat repo.json
+
+    - name: Free disk space
+      run: |
+        ./scripts/run-docker.sh true
+        ./scripts/free-space.sh
+
+    - name: Build packages
+      run: |
+        mkdir -p output
+        ./scripts/run-docker.sh -d ./build-package.sh --format pacman -I -C -a aarch64 $PACKAGES
+
+    - name: Pack the packages
+      if: always()
+      run: |
+        mkdir -p artifacts
+        # names with ':' (epochs) break actions/upload-artifact, so they go in a tarball
+        tar cf artifacts/pacman-aarch64-${{ github.sha }}.tar -C output $(cd output && ls *.pkg.tar.xz 2>/dev/null)
+        ls -l output
+
+    - name: Upload the packages
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: pacman-aarch64-${{ github.sha }}
+        path: ./artifacts
