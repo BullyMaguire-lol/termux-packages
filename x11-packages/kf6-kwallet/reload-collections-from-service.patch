@@ -1,0 +1,98 @@
+kwalletd6: ask the service for its collections instead of trusting the cache
+
+Creating a wallet through kwalletd6 can end with the user being asked to
+create a second one called "kdewallet__0_" right after "kdewallet".
+
+openInternal() decides whether to create a wallet by looking at
+listCollections(). That calls secret_service_load_collections_sync(), which
+sounds like it talks to the service but really just re-reads the
+"Collections" property cached in libsecret's D-Bus proxy. The cache is only
+updated when the service's PropertiesChanged signal is dispatched by our own
+main loop, and we don't get back to the main loop in time:
+
+  - Straight after createCollection() we look the new collection up to
+    unlock it. It isn't in the cache yet, so the open() that just created
+    the wallet returns -1.
+  - If another open() was queued while the create dialog was up, it can be
+    handled before the pending signal is. It doesn't see the wallet either
+    and calls createCollection() again. ksecretd then picks a free name for
+    the same label, and the user gets a prompt for "kdewallet__0_".
+
+This is easy to hit when the first wallet is created on demand, e.g. KMail's
+account setup on Termux where nothing has created kdewallet beforehand. It
+would also explain why creating the wallet in System Settings beforehand
+only seems to help after logging out and in again.
+
+Fetch the property from the service ourselves, put it in the proxy's cache,
+and only then let libsecret reload. Both callers (listCollections and
+retrieveCollection) go through the new helper.
+
+Reproduced outside of KDE with libsecret and a small mock service doing what
+ksecretd does on CreateCollection: without this change two back to back
+opens create "kdewallet" and "kdewallet__0_" and both fail, with it there is
+one wallet and both succeed.
+
+--- a/src/runtime/kwalletd/secretserviceclient.cpp
++++ b/src/runtime/kwalletd/secretserviceclient.cpp
+@@ -81,6 +81,43 @@
+     return false;
+ }
+ 
++// secret_service_load_collections_sync() doesn't actually ask the service for
++// anything: it rebuilds the list from the "Collections" property the D-Bus
++// proxy has cached. That cache only changes once a signal from the service has
++// been dispatched by our main loop, and that hasn't happened yet when we look
++// right after creating a collection, or when the next open() was already
++// sitting in the queue while the create dialog was on screen. The wallet we
++// just made then looks like it isn't there, the open that created it fails,
++// and the next one asks the service to create it again, which is how people
++// end up being asked to create "kdewallet__0_".
++// So fetch the property ourselves first and then let libsecret reload from it.
++static bool reloadCollections(SecretService *service, GError **error)
++{
++    GDBusProxy *proxy = G_DBUS_PROXY(service);
++    GVariant *reply = g_dbus_connection_call_sync(g_dbus_proxy_get_connection(proxy),
++                                                  g_dbus_proxy_get_name(proxy),
++                                                  g_dbus_proxy_get_object_path(proxy),
++                                                  "org.freedesktop.DBus.Properties",
++                                                  "Get",
++                                                  g_variant_new("(ss)", "org.freedesktop.Secret.Service", "Collections"),
++                                                  G_VARIANT_TYPE("(v)"),
++                                                  G_DBUS_CALL_FLAGS_NONE,
++                                                  -1,
++                                                  nullptr,
++                                                  error);
++    if (!reply) {
++        return false;
++    }
++
++    GVariant *paths = nullptr;
++    g_variant_get(reply, "(v)", &paths);
++    g_dbus_proxy_set_cached_property(proxy, "Collections", paths);
++    g_variant_unref(paths);
++    g_variant_unref(reply);
++
++    return secret_service_load_collections_sync(service, nullptr, error);
++}
++
+ static QString typeToString(SecretServiceClient::Type type)
+ {
+     // Similar to QtKeychain implementation: adds the "map" datatype
+@@ -204,7 +241,7 @@
+ 
+     // get_collections() can return a cached, stale list; force a reload, as listCollections() does.
+     GError *error = nullptr;
+-    secret_service_load_collections_sync(m_service.get(), nullptr, &error);
++    reloadCollections(m_service.get(), &error);
+     if (!wasErrorFree(&error)) {
+         return nullptr;
+     }
+@@ -553,7 +590,7 @@
+ 
+     // secret_service_get_collections might be cached and can return stale contents
+     // force a reload of the collection list, see BUG:512135
+-    secret_service_load_collections_sync(m_service.get(), nullptr, &error);
++    reloadCollections(m_service.get(), &error);
+     if (!wasErrorFree(&error)) {
+         *ok = false;
+         return QStringList();

@@ -1,0 +1,58 @@
+kwalletd6: don't fail networkWallet() when no wallet exists yet
+
+On a fresh profile there are no wallets, so ksecretd answers
+ReadAlias("default") with "/" and defaultCollection() reports a failure.
+networkWallet() then turns that into a D-Bus error, and that is where
+things go wrong for the first app that touches the wallet:
+
+  - qtkeychain asks for the wallet name with networkWallet() before every
+    read or write. With 0.18 the job just ends with this error, so the
+    password is never stored. (0.17 and older were worse: they took the
+    error as "KWallet isn't available" and quietly switched to libsecret.)
+  - KWallet::Wallet::NetworkWallet() returns an empty string on the error,
+    so libkgapi tries to open a wallet called "" for the Gmail token.
+
+Either way the user never gets the normal "create a new wallet" dialog.
+On Termux, where there is no kwallet-pam to create the wallet at login,
+KMail is usually that first app, and account setup fails until someone
+creates kdewallet by hand in System Settings and logs out and in again.
+
+The old kwalletd simply returned the configured name here, no matter
+whether the file existed. Do that again: when there is no default
+collection yet, answer with the configured name so the client's open()
+call reaches ksecretd and the create dialog shows up as intended.
+
+The error reply was introduced by MR 157 (merged 2026-07-28, first released
+in KF 6.29.0). Still present in 6.32.0 and in master.
+
+--- a/src/runtime/kwalletd/kwalletd.cpp
++++ b/src/runtime/kwalletd/kwalletd.cpp
+@@ -1013,8 +1013,14 @@
+     const QString defaultWallet = m_backend->defaultCollection(&ok);
+ 
+     if (!ok) {
+-        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to query default collection"));
+-        return {};
++        // Nothing to look up yet: on a brand new profile ksecretd has no
++        // collections at all, so the "default" alias doesn't resolve. That is
++        // not an error from the caller's point of view, it just means the wallet
++        // hasn't been created. Hand back the configured name (kdewallet unless
++        // the user changed it) like the old kwalletd did, otherwise qtkeychain
++        // gives up with an error and libkgapi ends up trying to open a
++        // wallet with an empty name, and the first wallet never gets created.
++        return KWallet::Backend::networkWallet();
+     }
+     return defaultWallet;
+ }
+@@ -1030,8 +1036,9 @@
+         const QString defaultWallet = m_backend->defaultCollection(&ok);
+ 
+         if (!ok) {
+-            sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to query default collection"));
+-            return {};
++            // Same story as in networkWallet() above: no wallet exists yet,
++            // so fall back to the configured name instead of failing.
++            return KWallet::Backend::localWallet();
+         }
+         return defaultWallet;
+     }

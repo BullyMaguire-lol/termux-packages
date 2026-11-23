@@ -1,0 +1,36 @@
+kwalletd6: emit walletAsyncOpened also when the open failed
+
+openAsync() hands back a transaction id and promises the result through the
+walletAsyncOpened signal. When openInternal() fails (the user cancelled the
+dialog, the collection could not be created or unlocked, ...) we returned
+without emitting anything.
+
+On the client side KWallet::Wallet turns that signal into walletOpened(bool),
+and that is the only thing an asynchronous caller gets. With no signal the
+caller waits forever: no error, no retry, nothing on screen.
+
+libkgapi opens the wallet this way before it starts the Google sign-in, so a
+failed open shows up as "the browser never opens" when adding a Gmail account
+in KMail. Pressing Previous and Next in the account wizard appears to fix it
+only because that creates a second resource which opens the wallet again.
+
+The old kwalletd always emitted the signal, with -1 as the handle on failure,
+and KWallet::Wallet already handles that (handle > 0 decides success). Do the
+same here.
+
+--- a/src/runtime/kwalletd/kwalletd.cpp
++++ b/src/runtime/kwalletd/kwalletd.cpp
+@@ -349,9 +349,10 @@
+ 
+     QTimer::singleShot(0, [this, wallet, wId, appId, tid]() {
+         int rnd = openInternal(wallet, wId, appId);
+-        if (rnd < 0) {
+-            return;
+-        }
++        // Report failures as well. KWallet::Wallet only emits walletOpened()
++        // once this signal comes in, so if we keep quiet when the open failed
++        // or the user cancelled the dialog, the application is left waiting
++        // forever. The old kwalletd always answered, with -1 as the handle.
+         Q_EMIT walletAsyncOpened(tid, rnd);
+     });
+ 
